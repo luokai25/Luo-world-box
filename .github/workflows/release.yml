@@ -1,0 +1,51 @@
+name: Build and release APK
+
+# Every push to main builds the game. If (and only if) the build succeeds,
+# the signed APK is published straight to a new GitHub Release.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Build signed release APK
+        run: gradle --no-daemon --stacktrace assembleRelease
+
+      - name: Verify APK exists
+        run: |
+          ls -l app/build/outputs/apk/release/
+          test -f app/build/outputs/apk/release/app-release.apk
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v0.1.${{ github.run_number }}"
+          cp app/build/outputs/apk/release/app-release.apk "LuoWorldBox-${TAG}.apk"
+          gh release create "$TAG" "LuoWorldBox-${TAG}.apk" \
+            --target "${{ github.sha }}" \
+            --title "Luo World Box ${TAG}" \
+            --generate-notes \
+            --notes "Free build of Luo World Box. No ads, no purchases, nothing locked. Install the attached APK on Android 8.0+."
