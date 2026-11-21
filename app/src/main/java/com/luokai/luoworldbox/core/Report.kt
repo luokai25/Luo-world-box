@@ -104,6 +104,19 @@ object Report {
                 appendLine("Kingdom ${k?.name ?: "none"}${if (k != null && k.kingId == c.id) "  (King)" else ""}")
                 appendLine("Village ${v?.name ?: "none"}")
                 appendLine("Mood ${mood(w, c)}   Kills ${c.kills}")
+                if (c.isAdult) appendLine("Job: ${Job.NAMES[c.job.coerceIn(0, Job.NAMES.size - 1)]}")
+                appendLine("Now: " + when {
+                    c.inside && c.sleeping -> "sleeping at home"
+                    c.inside -> "resting at home"
+                    c.chase != null -> "fighting"
+                    c.act == Act.WORK -> when (c.job) {
+                        Job.WOOD -> "chopping a tree"; Job.FARM -> "tending the fields"
+                        Job.MINE -> "mining"; Job.BUILD -> "building a house"; else -> "working"
+                    }
+                    c.act == Act.GOTO_WORK -> "heading to work"
+                    c.act == Act.RETURN -> if (c.carry != 0) "carrying goods home" else "going home"
+                    else -> "wandering"
+                })
             }
             if (c.infected >= 0f) appendLine("Infected!")
             if (c.burning > 0f) appendLine("On fire!")

@@ -54,6 +54,14 @@ The reference has many more icons per tab (the scroll rows are long). More power
 - Seven ages (Hope, Sun, Dark, Tears, Moon, Chaos, Wonders) each change growth, fire, births or trigger events.
 - Saves: three slots plus an autosave when you leave.
 
+## Daily life (added after the first release)
+
+- Day and night cycle (60 s per day), shown by a night tint, lit windows and a sun/moon in the status line.
+- Jobs: Woodcutter, Farmer, Miner, Builder, Hunter. Each has a tool shown in hand and a swing animation.
+- Work loop: choose a workplace, walk there, work, carry the result home, enter the house, deposit, eat, come out.
+- Houses are built on visible construction sites that rise as builders spend wood.
+- Everyone goes inside at night; sleepers wake at dawn. Hidden villagers cannot be attacked or inspected.
+
 ## Next
 
 1. Kingdom window as tabs (the graph and history log already exist as separate dialogs).

@@ -156,6 +156,19 @@ object SpriteGen {
         return p.a
     }
 
+    /** House under construction; progress 0..6 raises the walls. */
+    fun site(progress: Int): IntArray {
+        val p = Px()
+        p.rect(2, 13, 12, 2, 0x9A9A8E)
+        p.rect(2, 5, 1, 9, 0x7A5A32); p.rect(13, 5, 1, 9, 0x7A5A32)
+        val h = (progress.coerceIn(0, 6) * 1.5f).toInt()
+        if (h > 0) p.rect(3, 13 - h, 10, h, 0xC8A870)
+        if (progress >= 3) p.rect(2, 4, 12, 1, 0x7A5A32)
+        if (progress >= 5) p.rect(3, 3, 10, 1, 0xB8402F)
+        p.outline(DARK)
+        return p.a
+    }
+
     private fun scaleRgb(rgb: Int, f: Float): Int {
         val r = ((rgb shr 16 and 255) * f).toInt()
         val g = ((rgb shr 8 and 255) * f).toInt()

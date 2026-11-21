@@ -9,6 +9,7 @@ class SpriteBank {
     private val creatures = HashMap<Int, Bitmap>()
     private val houses = HashMap<Int, Bitmap>()
     private val trees = arrayOfNulls<Bitmap>(3)
+    private val sites = arrayOfNulls<Bitmap>(7)
 
     private fun make(px: IntArray): Bitmap =
         Bitmap.createBitmap(px, SpriteGen.N, SpriteGen.N, Bitmap.Config.ARGB_8888)
@@ -22,6 +23,13 @@ class SpriteBank {
         val k = kind.coerceIn(0, 2)
         var b = trees[k]
         if (b == null) { b = make(SpriteGen.tree(k)); trees[k] = b }
+        return b
+    }
+
+    fun site(progress: Int): Bitmap {
+        val k = progress.coerceIn(0, 6)
+        var b = sites[k]
+        if (b == null) { b = make(SpriteGen.site(k)); sites[k] = b }
         return b
     }
 

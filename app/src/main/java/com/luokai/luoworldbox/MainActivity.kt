@@ -353,8 +353,9 @@ class MainActivity : Activity(), GameView.Host {
             text = "Choose a size and other options. Creating a new world will replace the current one."
             textSize = 13f
         })
-        seek("Size", 6, { cfg.sizeIndex }, { cfg.sizeIndex = it },
-            { "${WorldConfig.SIZE_NAMES[it]} (${WorldConfig.SIZES[it]}×${WorldConfig.SIZES[it]}) ${it + 1}/7" })
+        seek("Size", WorldConfig.SIZES.size - 1, { cfg.sizeIndex }, { cfg.sizeIndex = it },
+            { "${WorldConfig.SIZE_NAMES[it]} (${WorldConfig.SIZES[it]}×${WorldConfig.SIZES[it]}) ${it + 1}/${WorldConfig.SIZES.size}" })
+        sw("Populate with animals and tribes", { cfg.populate }, { cfg.populate = it })
         val climateBtn = Button(this)
         fun updClimate() { climateBtn.text = "Climate: " + cfg.climate.name.lowercase().replaceFirstChar { it.uppercase() } }
         updClimate()

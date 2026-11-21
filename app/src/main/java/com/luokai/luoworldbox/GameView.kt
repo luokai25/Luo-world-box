@@ -12,7 +12,10 @@ import android.os.Looper
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import com.luokai.luoworldbox.core.Act
+import com.luokai.luoworldbox.core.Creature
 import com.luokai.luoworldbox.core.Fx
+import com.luokai.luoworldbox.core.Job
 import com.luokai.luoworldbox.core.Kind
 import com.luokai.luoworldbox.core.Report
 import com.luokai.luoworldbox.core.SaveStore
@@ -214,7 +217,7 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
                         if (toasts.size > 5) { toasts.removeAt(0); toastLife.removeAt(0) }
                     }
                     autosave += dt
-                    if (autosave > 90f) {
+                    if (autosave > 180f) {
                         autosave = 0f
                         try { SaveStore.save(context.filesDir, SaveStore.AUTO, w) } catch (e: Exception) { }
                     }
@@ -488,9 +491,15 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
         val w = world
         if (loading || w == null) { drawLoading(canvas); return }
         if (needFit) {
-            camX = w.w / 2f; camY = w.h / 2f
-            zoom = min(width / w.w.toFloat(), (height - barH) / w.h.toFloat()) * 0.95f
-            zoom = max(zoom, minZoom())
+            val v0 = w.villages.firstOrNull()
+            if (v0 != null) {
+                camX = v0.cx; camY = v0.cy
+                zoom = max(28f, minZoom())
+            } else {
+                camX = w.w / 2f; camY = w.h / 2f
+                zoom = min(width / w.w.toFloat(), (height - barH) / w.h.toFloat()) * 0.95f
+                zoom = max(zoom, minZoom())
+            }
             needFit = false
         }
         refreshBitmap(w)
@@ -534,6 +543,16 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
                 val roof = k?.color ?: 0xFFCC4444.toInt()
                 val tier = if (v.houses.size < 3) 0 else if (v.houses.size < 8) 1 else 2
                 val spr = sprites.house(tier, roof)
+                if (v.site >= 0) {
+                    val sx = v.site % w.w
+                    val sy = v.site / w.w
+                    if (sx in vx0..vx1 && sy in vy0..vy1) {
+                        val cx = ox + (sx + 0.5f) * s
+                        val bottom = oy + (sy + 1f) * s
+                        dst.set(cx - hs / 2, bottom - hs, cx + hs / 2, bottom)
+                        canvas.drawBitmap(sprites.site(v.siteProgress), null, dst, bmpPaint)
+                    }
+                }
                 for (hi in v.houses) {
                     val hx = hi % w.w
                     val hy = hi / w.w
@@ -548,6 +567,7 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
 
         drawCreatures(canvas, w, s, ox, oy)
         drawZonesAndFx(canvas, w, s, ox, oy)
+        drawDayNight(canvas, w, s, ox, oy)
         drawBrush(canvas)
         drawHud(canvas, w)
     }
@@ -577,7 +597,7 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
     private fun drawCreatures(canvas: Canvas, w: World, s: Float, ox: Float, oy: Float) {
         val size = max(s * 1.15f, 12f * dp).coerceAtMost(96f * dp)
         for (c in w.creatures) {
-            if (!c.alive) continue
+            if (!c.alive || c.inside) continue
             val cx = ox + c.x * s
             val cy = oy + c.y * s
             if (cx < -60 || cx > width + 60 || cy < -60 || cy > height + 60) continue
@@ -594,6 +614,7 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
             val sz = size * kid
             dst.set(cx - sz / 2, cy - sz * 0.85f + bob, cx + sz / 2, cy + sz * 0.15f + bob)
             canvas.drawBitmap(sprites.creature(sp, frame, c.faceRight), null, dst, bmpPaint)
+            if (sp.kind == Kind.SAPIENT && s >= 5f) { drawCarry(canvas, c, cx, cy, sz); drawTool(canvas, w, c, cx, cy, sz) }
             if (sp.kind == Kind.SAPIENT) {
                 val k = w.kingdomById(c.kingdomId)
                 if (k != null) {
@@ -614,6 +635,86 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
                 canvas.drawRect(cx - sz / 2, dst.bottom + 1, cx + sz / 2, dst.bottom + 1 + 3 * dp, fill)
                 fill.color = 0xFF3DDC55.toInt()
                 canvas.drawRect(cx - sz / 2, dst.bottom + 1, cx - sz / 2 + sz * (c.hp / sp.hp).coerceIn(0f, 1f), dst.bottom + 1 + 3 * dp, fill)
+            }
+        }
+    }
+
+    private fun drawCarry(canvas: Canvas, c: Creature, cx: Float, cy: Float, sz: Float) {
+        if (c.carry == 0) return
+        val u = sz / 16f
+        val dir = if (c.faceRight) 1f else -1f
+        val bx = cx - dir * sz * 0.26f
+        val by = cy - sz * 0.5f
+        fill.color = when (c.carry) { 1 -> 0xFF8A5A2A.toInt(); 2 -> 0xFFE0C040.toInt(); 3 -> 0xFF8A9AAA.toInt(); else -> 0xFFC0443A.toInt() }
+        canvas.drawRect(bx - 2.4f * u, by - 1.4f * u, bx + 2.4f * u, by + 1.4f * u, fill)
+        fill.color = 0x55FFFFFF
+        canvas.drawRect(bx - 2.4f * u, by - 1.4f * u, bx + 2.4f * u, by - 0.4f * u, fill)
+    }
+
+    /** Tool in the villager's hand: axe, hoe, pickaxe, hammer, spear or sword. It swings while working. */
+    private fun drawTool(canvas: Canvas, w: World, c: Creature, cx: Float, cy: Float, sz: Float) {
+        var kind = 0
+        val ch = c.chase
+        if (ch != null && c.isAdult) kind = if (c.job == Job.HUNT && ch.sp.kind == Kind.HERBIVORE) 5 else 6
+        else if (c.act == Act.GOTO_WORK || c.act == Act.WORK) kind = c.job
+        if (kind <= 0 || kind > 6) return
+        val working = c.act == Act.WORK || (ch != null && c.atkCd > 0.2f)
+        val ang = if (working) sin(w.time * 10.0 + c.id).toFloat() * 55f else -25f
+        val u = sz / 16f
+        val dir = if (c.faceRight) 1f else -1f
+        canvas.save()
+        canvas.translate(cx + dir * sz * 0.30f, cy - sz * 0.30f)
+        canvas.scale(dir, 1f)
+        canvas.rotate(ang)
+        val wood = 0xFF6A4A2A.toInt()
+        val steel = 0xFFC8CCD2.toInt()
+        when (kind) {
+            1 -> { fill.color = wood; canvas.drawRect(-0.5f * u, -7f * u, 0.5f * u, 1f * u, fill)
+                   fill.color = steel; canvas.drawRect(0.5f * u, -7f * u, 3.5f * u, -3.8f * u, fill) }
+            2 -> { fill.color = wood; canvas.drawRect(-0.5f * u, -7f * u, 0.5f * u, 1f * u, fill)
+                   fill.color = steel; canvas.drawRect(-0.2f * u, -7.4f * u, 3.6f * u, -6f * u, fill) }
+            3 -> { fill.color = wood; canvas.drawRect(-0.5f * u, -7f * u, 0.5f * u, 1f * u, fill)
+                   fill.color = steel; canvas.drawRect(-3.2f * u, -7.6f * u, 3.2f * u, -6.2f * u, fill) }
+            4 -> { fill.color = wood; canvas.drawRect(-0.5f * u, -6f * u, 0.5f * u, 1f * u, fill)
+                   fill.color = 0xFF5A5E66.toInt(); canvas.drawRect(-2f * u, -8f * u, 2f * u, -5.4f * u, fill) }
+            5 -> { fill.color = wood; canvas.drawRect(-0.4f * u, -9f * u, 0.4f * u, 2f * u, fill)
+                   fill.color = steel; canvas.drawRect(-1f * u, -11.5f * u, 1f * u, -8.8f * u, fill) }
+            else -> { fill.color = steel; canvas.drawRect(-0.7f * u, -9f * u, 0.7f * u, -2f * u, fill)
+                      fill.color = 0xFFC9A227.toInt(); canvas.drawRect(-2.2f * u, -2.2f * u, 2.2f * u, -1.4f * u, fill)
+                      fill.color = wood; canvas.drawRect(-0.5f * u, -1.4f * u, 0.5f * u, 1f * u, fill) }
+        }
+        canvas.restore()
+    }
+
+    /** Night tint, lit windows and chimney smoke for houses that have someone inside. */
+    private fun drawDayNight(canvas: Canvas, w: World, s: Float, ox: Float, oy: Float) {
+        val nl = w.nightLevel()
+        if (nl > 0.02f) {
+            fill.color = ((nl * 125).toInt() shl 24) or 0x0A1236
+            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), fill)
+        }
+        if (s < 4f) return
+        val occ = HashSet<Int>()
+        for (c in w.creatures) if (c.alive && c.inside && c.homeIdx >= 0) occ.add(c.homeIdx)
+        if (occ.isEmpty()) return
+        for (v in w.villages) for (hi in v.houses) {
+            if (!occ.contains(hi)) continue
+            val hx = hi % w.w
+            val hy = hi / w.w
+            val cx = ox + (hx + 0.5f) * s
+            val bottom = oy + (hy + 1f) * s
+            if (cx < -40 || cx > width + 40 || bottom < -60 || bottom > height + 80) continue
+            if (nl > 0.1f) {
+                fill.color = ((nl * 200).toInt() shl 24) or 0xFFD060
+                canvas.drawRect(cx - s * 0.42f, bottom - s * 0.62f, cx - s * 0.22f, bottom - s * 0.42f, fill)
+                canvas.drawRect(cx + s * 0.22f, bottom - s * 0.62f, cx + s * 0.42f, bottom - s * 0.42f, fill)
+            }
+            for (k in 0 until 3) {
+                val t = ((w.time * 0.7 + k / 3.0 + hi * 0.37) % 1.0).toFloat()
+                val px = cx + s * 0.32f + sin(t * 6f + hi).toFloat() * s * 0.08f
+                val py = bottom - s * 1.0f - t * s * 1.2f
+                fill.color = (((1f - t) * 150).toInt() shl 24) or 0xC8C8C8
+                canvas.drawCircle(px, py, s * 0.09f * (0.7f + t), fill)
             }
         }
     }
@@ -784,7 +885,7 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
             popCache = a; mobCache = b
         }
         // status
-        val line1 = "${w.age.name}  •  Year ${w.year}  •  ${w.monthName}  •  ${w.moonsLeft} moons left"
+        val line1 = (if (w.nightLevel() > 0.5f) "🌙 " else "☀ ") + "${w.age.name}  •  Year ${w.year}  •  ${w.monthName}  •  ${w.moonsLeft} moons left"
         val sel = selected
         val line2 = "Pop $popCache   Mobs $mobCache   " + (if (sel != null) "${sel.name}" else "Move mode") +
             (if (paused) "   ⏸ PAUSED" else "") + "   ×${speeds[speedIdx]}"

@@ -16,9 +16,7 @@ const val MONTH_SEC = 1f
 const val MOONS_PER_AGE = 600
 const val STEP = 0.25f
 
-private const val MAX_SAPIENTS = 900
-private const val MAX_ANIMALS = 1000
-private const val MAX_MONSTERS = 250
+const val DAY_SEC = 60f
 private const val CELL = 8
 
 private val MONTHS = arrayOf(
@@ -59,6 +57,10 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
     private var nextVillageId = 1
     private var nextKingdomId = 1
     private var accSlow = 0f
+    @Transient private var night = false
+    private val maxSapients: Int get() = (w * h / 200).coerceIn(900, 2500)
+    private val maxAnimals: Int get() = (w * h / 250).coerceIn(1000, 2200)
+    private val maxMonsters: Int get() = 250
     private var accKingdom = 0f
 
     // renderer bookkeeping (not saved)
@@ -76,6 +78,17 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
     val ageIdx: Int get() = (moon / MOONS_PER_AGE) % WorldAges.ALL.size
     val age: AgeDef get() = WorldAges.ALL[ageIdx]
     val moonsLeft: Int get() = MOONS_PER_AGE - moon % MOONS_PER_AGE
+
+    /** 0 = full daylight, 1 = deep night. A day lasts DAY_SEC seconds of simulated time. */
+    fun nightLevel(): Float {
+        val p = ((time % DAY_SEC) / DAY_SEC).toFloat()
+        return when {
+            p < 0.60f -> 0f
+            p < 0.72f -> (p - 0.60f) / 0.12f
+            p < 0.92f -> 1f
+            else -> ((1f - p) / 0.08f).coerceIn(0f, 1f)
+        }
+    }
 
     fun skipToNextAge() {
         time = ((moon / MOONS_PER_AGE + 1) * MOONS_PER_AGE).toDouble() * MONTH_SEC
@@ -168,7 +181,7 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
         var bd = r * r
         for (cy in r0..r1) for (cx in c0..c1) {
             for (o in g[cy * gw + cx]) {
-                if (o === self || !o.alive) continue
+                if (o === self || !o.alive || o.inside) continue
                 val dx = o.x - x
                 val dy = o.y - y
                 val d = dx * dx + dy * dy
@@ -208,7 +221,7 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
         var best: Creature? = null
         var bd = r * r
         for (c in creatures) {
-            if (!c.alive) continue
+            if (!c.alive || c.inside) continue
             val dx = c.x - x; val dy = c.y - y
             val d = dx * dx + dy * dy
             if (d < bd) { bd = d; best = c }
@@ -219,6 +232,7 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
     // ---------------------------------------------------------------- main step
     fun step(dt: Float) {
         time += dt
+        night = nightLevel() > 0.5f
         rebuildGrid()
         stepCreatures(dt)
         creatures.removeAll { !it.alive }
@@ -259,9 +273,9 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
     fun spawn(sp: Species, x: Float, y: Float, adult: Boolean = true): Creature? {
         val n = countKind()
         when (sp.kind) {
-            Kind.SAPIENT -> if (n[0] >= MAX_SAPIENTS) return null
-            Kind.MONSTER -> if (n[3] >= MAX_MONSTERS) return null
-            else -> if (n[1] + n[2] >= MAX_ANIMALS) return null
+            Kind.SAPIENT -> if (n[0] >= maxSapients) return null
+            Kind.MONSTER -> if (n[3] >= maxMonsters) return null
+            else -> if (n[1] + n[2] >= maxAnimals) return null
         }
         val xi = x.toInt(); val yi = y.toInt()
         if (!inBounds(xi, yi)) return null
@@ -314,6 +328,7 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
             if (by != null) {
                 by.kills++
                 by.hunger = min(1f, by.hunger + 0.6f)
+                if (by.sp.kind == Kind.SAPIENT && c.sp.kind == Kind.HERBIVORE) by.carry = 4
             }
         }
     }
@@ -378,6 +393,9 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
             if (c.mad > 0f) c.mad -= dt
             if (c.atkCd > 0f) c.atkCd -= dt
             if (c.breedCd > 0f) c.breedCd -= dt
+
+            if (c.inside) { updateInside(c, dt); continue }
+            if (sp.kind == Kind.SAPIENT) workStep(c, dt)
 
             c.think -= dt
             if (c.think <= 0f) {
@@ -486,6 +504,7 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
             c.chase = nearest(c.x, c.y, sp.vision, c) { isEnemy(c, it) }
         }
         if (c.chase != null) {
+            c.act = Act.IDLE
             if (!c.isAdult) {
                 c.fleeing = true
                 val e = c.chase!!
@@ -496,26 +515,31 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
             return
         }
         val v = villageById(c.villageId)
-        // eat
-        if (c.hunger < 0.5f) {
-            if (v != null && v.food >= 1f) {
-                v.food -= 1f
-                c.hunger = min(1f, c.hunger + 0.6f)
-            } else {
-                val prey = nearest(c.x, c.y, 10f, c) { it.sp.kind == Kind.HERBIVORE && it.sp !== Sp.DOG }
-                if (prey != null && c.isAdult) { c.chase = prey; return }
+        if (v != null) {
+            if (c.act != Act.IDLE) return
+            if (c.homeIdx < 0 || bld[c.homeIdx] != v.id + 1) c.homeIdx = pickHome(v, c)
+            if (night || c.carry != 0 || (c.hunger < 0.45f && v.food >= 1f)) {
+                if (goHome(c, v)) return
+            }
+            if (!c.isAdult) { wanderAround(c, v.cx, v.cy, v.radius * 0.8f); return }
+            if (c.hunger < 0.45f && v.food < 1f) {
+                val prey = nearest(c.x, c.y, 12f, c) { it.sp.kind == Kind.HERBIVORE && it.sp !== Sp.DOG }
+                if (prey != null) { c.chase = prey; c.job = Job.HUNT; return }
                 val t = tileAt(c.x.toInt().coerceIn(0, w - 1), c.y.toInt().coerceIn(0, h - 1))
                 if (t == Tile.FOREST || t == Tile.GRASS) c.hunger = min(1f, c.hunger + 0.12f)
             }
-        }
-        if (v != null) {
-            // stay near home
-            val ang = rnd.nextFloat() * 6.2831855f
-            val d = rnd.nextFloat() * (v.radius * 0.9f)
-            setTarget(c, v.cx + cos(ang) * d, v.cy + sin(ang) * d)
+            val job = pickJob(c, v)
+            if (startJob(c, v, job) || startJob(c, v, Job.WOOD) || startJob(c, v, Job.FARM)) return
+            wanderAround(c, v.cx, v.cy, v.radius * 0.9f)
             return
         }
-        // homeless: join or found a village
+        // homeless: eat what the land offers, then join or found a village
+        if (c.hunger < 0.5f) {
+            val prey = nearest(c.x, c.y, 10f, c) { it.sp.kind == Kind.HERBIVORE && it.sp !== Sp.DOG }
+            if (prey != null && c.isAdult) { c.chase = prey; return }
+            val t = tileAt(c.x.toInt().coerceIn(0, w - 1), c.y.toInt().coerceIn(0, h - 1))
+            if (t == Tile.FOREST || t == Tile.GRASS) c.hunger = min(1f, c.hunger + 0.12f)
+        }
         if (c.isAdult) {
             var near: Village? = null
             var bd = 45f * 45f
@@ -539,6 +563,207 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
             }
         }
         wander(c, 14f)
+    }
+
+    // ---------------------------------------------------------------- daily life of villagers
+    private fun wanderAround(c: Creature, cx: Float, cy: Float, r: Float) {
+        val ang = rnd.nextFloat() * 6.2831855f
+        val d = rnd.nextFloat() * r
+        setTarget(c, cx + cos(ang) * d, cy + sin(ang) * d)
+    }
+
+    private fun pickHome(v: Village, c: Creature): Int =
+        if (v.houses.isEmpty()) -1 else v.houses[(c.id * 7 + 3) % v.houses.size]
+
+    private fun pickJob(c: Creature, v: Village): Int {
+        if (v.site >= 0 && c.id % 3 == 0) return if (v.wood >= 1) Job.BUILD else Job.WOOD
+        return when (c.id % 8) {
+            0, 1, 2 -> if (v.fields.isNotEmpty()) Job.FARM else Job.WOOD
+            3, 4, 7 -> Job.WOOD
+            5 -> Job.MINE
+            else -> Job.HUNT
+        }
+    }
+
+    private fun findTile(v: Village, radius: Float, tries: Int, pred: (Int) -> Boolean): Int {
+        for (k in 0 until tries) {
+            val ang = rnd.nextFloat() * 6.2831855f
+            val d = sqrt(rnd.nextFloat()) * radius
+            val x = (v.cx + cos(ang) * d).toInt()
+            val y = (v.cy + sin(ang) * d).toInt()
+            if (!inBounds(x, y)) continue
+            val i = y * w + x
+            if (pred(i)) return i
+        }
+        return -1
+    }
+
+    private fun startJob(c: Creature, v: Village, job: Int): Boolean {
+        var tile = -1
+        when (job) {
+            Job.WOOD -> {
+                tile = findTile(v, 18f, 14) { tiles[it].toInt() == Tile.FOREST && fire[it].toInt() == 0 }
+                if (tile < 0) tile = findTile(v, 34f, 22) { tiles[it].toInt() == Tile.FOREST && fire[it].toInt() == 0 }
+            }
+            Job.FARM -> if (v.fields.isNotEmpty()) tile = v.fields[rnd.nextInt(v.fields.size)]
+            Job.MINE -> tile = findTile(v, 40f, 30) {
+                val t = tiles[it].toInt()
+                (t == Tile.HILLS || t == Tile.MOUNTAIN) && (ore[it].toInt() != 0 || rnd.nextFloat() < 0.25f)
+            }
+            Job.BUILD -> tile = v.site
+            Job.HUNT -> {
+                val prey = nearest(c.x, c.y, 16f, c) { it.sp.kind == Kind.HERBIVORE && it.sp !== Sp.DOG }
+                if (prey != null) { c.chase = prey; c.job = Job.HUNT; return true }
+                return false
+            }
+        }
+        if (tile < 0) return false
+        var sx = tile % w
+        var sy = tile / w
+        if (job == Job.MINE && tiles[tile].toInt() == Tile.MOUNTAIN && !c.sp.climbs) {
+            // stand next to the rock face
+            var found = false
+            for (k in 0 until 4) {
+                val nx = sx + (if (k == 0) 1 else if (k == 1) -1 else 0)
+                val ny = sy + (if (k == 2) 1 else if (k == 3) -1 else 0)
+                if (!inBounds(nx, ny)) continue
+                val nt = tiles[ny * w + nx].toInt()
+                if (nt != Tile.MOUNTAIN && nt != Tile.DEEP && nt != Tile.LAVA) { sx = nx; sy = ny; found = true; break }
+            }
+            if (!found) return false
+        }
+        c.job = job
+        c.workTile = tile
+        c.act = Act.GOTO_WORK
+        setTarget(c, sx + 0.5f, sy + 0.95f)
+        return true
+    }
+
+    private fun workTime(c: Creature, v: Village): Float {
+        val base = when (c.job) {
+            Job.WOOD -> 3.5f
+            Job.FARM -> 4.0f
+            Job.MINE -> 4.5f
+            else -> 3.2f
+        }
+        return base * (1f - 0.07f * v.tech) * (0.85f + rnd.nextFloat() * 0.3f)
+    }
+
+    private fun goHome(c: Creature, v: Village): Boolean {
+        if (c.homeIdx < 0 || bld[c.homeIdx] != v.id + 1) c.homeIdx = pickHome(v, c)
+        val hi = c.homeIdx
+        if (hi < 0) return false
+        c.act = Act.RETURN
+        c.chase = null
+        setTarget(c, hi % w + 0.5f, hi / w + 0.95f)
+        return true
+    }
+
+    private fun workStep(c: Creature, dt: Float) {
+        if (c.act == Act.IDLE) return
+        val v = villageById(c.villageId)
+        if (v == null) { c.act = Act.IDLE; return }
+        if (c.chase != null) { c.act = Act.IDLE; return }
+        when (c.act) {
+            Act.GOTO_WORK -> {
+                if (night) { if (!goHome(c, v)) c.act = Act.IDLE; return }
+                if (!c.hasTarget) {
+                    val dx = c.tx - c.x; val dy = c.ty - c.y
+                    if (dx * dx + dy * dy < 1.2f * 1.2f) { c.act = Act.WORK; c.actTimer = workTime(c, v) }
+                    else { c.act = Act.IDLE; c.think = 0.5f }
+                }
+            }
+            Act.WORK -> {
+                if (night) { if (!goHome(c, v)) c.act = Act.IDLE; return }
+                c.actTimer -= dt
+                if (c.actTimer <= 0f) finishWork(c, v)
+            }
+            Act.RETURN -> if (!c.hasTarget) {
+                val dx = c.tx - c.x; val dy = c.ty - c.y
+                if (dx * dx + dy * dy < 1.2f * 1.2f) enterHouse(c, v) else { c.act = Act.IDLE; c.think = 0.5f }
+            }
+        }
+    }
+
+    private fun finishWork(c: Creature, v: Village) {
+        val t = c.workTile
+        when (c.job) {
+            Job.WOOD -> if (t >= 0 && tiles[t].toInt() == Tile.FOREST) {
+                if (rnd.nextFloat() < 0.75f) setTile(t, Tile.GRASS)
+                c.carry = 1
+            }
+            Job.FARM -> if (t >= 0 && tiles[t].toInt() == Tile.FIELD) c.carry = 2
+            Job.MINE -> if (t >= 0) {
+                c.carry = 3
+                if (ore[t].toInt() != 0) { ore[t] = 0; dirtyRow(t / w); v.ore += 1 }
+            }
+            Job.BUILD -> if (v.site >= 0 && v.wood >= 1) {
+                v.wood--
+                v.siteProgress++
+                if (v.siteProgress >= 6) completeHouse(v)
+            }
+        }
+        c.act = Act.IDLE
+        c.workTile = -1
+        c.think = 0.1f
+        if (c.carry != 0) goHome(c, v)
+    }
+
+    private fun completeHouse(v: Village) {
+        val s = v.site
+        if (s >= 0 && bld[s] == 0 && !Tile.isWater(tiles[s].toInt())) {
+            bld[s] = v.id + 1
+            v.houses.add(s)
+        }
+        v.site = -1
+        v.siteProgress = 0
+    }
+
+    private fun enterHouse(c: Creature, v: Village) {
+        when (c.carry) {
+            1 -> v.wood++
+            2 -> v.food += 5f
+            3 -> { v.ore++; v.tech = min(5, v.ore / 8) }
+            4 -> v.food += 6f
+        }
+        c.carry = 0
+        if (c.hunger < 0.8f && v.food >= 1f) { v.food -= 1f; c.hunger = min(1f, c.hunger + 0.7f) }
+        val hi = c.homeIdx
+        if (hi >= 0) { c.x = hi % w + 0.5f; c.y = hi / w + 0.6f }
+        c.inside = true
+        c.hasTarget = false
+        c.chase = null
+        c.sleeping = night
+        c.actTimer = if (night) rnd.nextFloat() * 4f else 1.2f + rnd.nextFloat() * 1.8f
+        c.act = Act.INSIDE
+    }
+
+    private fun exitHouse(c: Creature) {
+        c.inside = false
+        c.act = Act.IDLE
+        c.y = (c.y + 0.55f).coerceAtMost(h - 1.5f)
+        c.think = 0.1f + rnd.nextFloat() * 0.3f
+    }
+
+    private fun updateInside(c: Creature, dt: Float) {
+        if (c.sleeping) {
+            if (!night) { c.actTimer -= dt; if (c.actTimer <= 0f) exitHouse(c) }
+        } else {
+            c.actTimer -= dt
+            if (c.actTimer <= 0f) exitHouse(c)
+        }
+    }
+
+    /** Public so world generation can drop a ready-made tribe (with a first house) onto the map. */
+    fun spawnTribe(sp: Species, x: Float, y: Float) {
+        val list = ArrayList<Creature>()
+        repeat(6) {
+            val ang = rnd.nextFloat() * 6.2831855f
+            val d = rnd.nextFloat() * 2.5f
+            val c = spawn(sp, x + cos(ang) * d, y + sin(ang) * d, true)
+            if (c != null) list.add(c)
+        }
+        if (list.size >= 2) foundVillage(list[0], list[1])
     }
 
     private fun tryBreed(c: Creature, ageFx: AgeDef) {
@@ -648,7 +873,7 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
         buildHouse(v, 0f)
     }
 
-    private fun buildHouse(v: Village, spread: Float): Boolean {
+    private fun findHouseSpot(v: Village, spread: Float): Int {
         repeat(12) {
             val ang = rnd.nextFloat() * 6.2831855f
             val d = 1f + rnd.nextFloat() * (2f + spread)
@@ -663,12 +888,18 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
                 for (oy in -1..1) for (ox in -1..1) {
                     if (inBounds(x + ox, y + oy) && bld[(y + oy) * w + x + ox] != 0) return@repeat
                 }
-                bld[i] = v.id + 1
-                v.houses.add(i)
-                return true
+                return i
             }
         }
-        return false
+        return -1
+    }
+
+    private fun buildHouse(v: Village, spread: Float): Boolean {
+        val i = findHouseSpot(v, spread)
+        if (i < 0) return false
+        bld[i] = v.id + 1
+        v.houses.add(i)
+        return true
     }
 
     fun removeBuilding(i: Int) {
@@ -676,6 +907,10 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
         if (b > 0) {
             bld[i] = 0
             villageById(b - 1)?.houses?.remove(i)
+            for (c in creatures) if (c.homeIdx == i) {
+                c.homeIdx = -1
+                if (c.inside) { c.inside = false; c.act = Act.IDLE; c.sleeping = false }
+            }
         }
     }
 
@@ -710,8 +945,12 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
                     }
                 }
             }
-            if (v.pop > v.houses.size * 3 - 1 && v.buildCd <= 0f && v.houses.size < 60) {
-                if (buildHouse(v, v.houses.size * 0.4f)) v.buildCd = 6f else v.buildCd = 3f
+            if (v.site >= 0 && (Tile.isWater(tiles[v.site].toInt()) || tiles[v.site].toInt() == Tile.LAVA || bld[v.site] != 0)) {
+                v.site = -1; v.siteProgress = 0
+            }
+            if (v.site < 0 && v.pop > v.houses.size * 3 - 1 && v.buildCd <= 0f && v.houses.size < 80) {
+                val si = findHouseSpot(v, v.houses.size * 0.4f)
+                if (si >= 0) { v.site = si; v.siteProgress = 0; v.buildCd = 4f } else v.buildCd = 3f
             }
             if (v.pop == 0) v.emptyTime += dt else v.emptyTime = 0f
             if (v.emptyTime > 40f) {

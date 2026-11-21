@@ -9,7 +9,7 @@ import kotlin.math.sqrt
 enum class Climate { TEMPERATE, FROZEN, DESERT, LUSH }
 
 class WorldConfig(
-    var sizeIndex: Int = 2,
+    var sizeIndex: Int = 7,
     var randomShapes: Boolean = true,
     var noiseMain: Int = 5,
     var noiseDetails: Int = 5,
@@ -26,17 +26,19 @@ class WorldConfig(
     var lowGround: Boolean = false,
     var highGround: Boolean = false,
     var removeMountains: Boolean = false,
-    var climate: Climate = Climate.TEMPERATE
+    var climate: Climate = Climate.TEMPERATE,
+    var populate: Boolean = true,
+    var seaBias: Float = 0f
 ) {
     fun copyConfig() = WorldConfig(
         sizeIndex, randomShapes, noiseMain, noiseDetails, noiseBonus, randomBiomes, mountainEdges,
         spawnVegetation, spawnResources, centerLake, centerLand, roundEdges, squareEdges, treeRing,
-        lowGround, highGround, removeMountains, climate
+        lowGround, highGround, removeMountains, climate, populate, seaBias
     )
 
     companion object {
-        val SIZES = intArrayOf(64, 96, 128, 192, 256, 384, 512)
-        val SIZE_NAMES = arrayOf("Tiny", "Small", "Standard", "Large", "Huge", "Giant", "Colossal")
+        val SIZES = intArrayOf(64, 96, 128, 192, 256, 384, 512, 704)
+        val SIZE_NAMES = arrayOf("Tiny", "Small", "Standard", "Large", "Huge", "Giant", "Colossal", "Titan")
     }
 }
 
@@ -45,9 +47,9 @@ class Template(val name: String, val cfg: WorldConfig)
 object Templates {
     val ALL: List<Template> = listOf(
         Template("Continent", WorldConfig()),
-        Template("Islands", WorldConfig(centerLand = false, noiseMain = 8, noiseDetails = 6, lowGround = true)),
-        Template("Archipelago", WorldConfig(centerLand = false, noiseMain = 9, noiseDetails = 8, lowGround = true, roundEdges = false)),
-        Template("Pangaea", WorldConfig(centerLand = true, noiseMain = 3, highGround = true, roundEdges = false, squareEdges = false)),
+        Template("Islands", WorldConfig(centerLand = false, noiseMain = 8, noiseDetails = 6, lowGround = true, seaBias = 0.04f)),
+        Template("Archipelago", WorldConfig(centerLand = false, noiseMain = 9, noiseDetails = 8, lowGround = true, roundEdges = false, seaBias = 0.03f)),
+        Template("Pangaea", WorldConfig(centerLand = true, noiseMain = 3, roundEdges = false, squareEdges = false)),
         Template("Atoll", WorldConfig(centerLand = false, centerLake = true, noiseMain = 4, treeRing = true)),
         Template("Highlands", WorldConfig(highGround = true, noiseMain = 6, noiseBonus = 8)),
         Template("Lowlands", WorldConfig(removeMountains = true, noiseMain = 4, noiseDetails = 3)),
@@ -55,7 +57,7 @@ object Templates {
         Template("Frozen North", WorldConfig(climate = Climate.FROZEN)),
         Template("Desert", WorldConfig(climate = Climate.DESERT, spawnVegetation = false)),
         Template("Jungle", WorldConfig(climate = Climate.LUSH, noiseDetails = 7)),
-        Template("Open Sea", WorldConfig(centerLand = false, lowGround = true, noiseMain = 3, noiseDetails = 2, noiseBonus = 0))
+        Template("Open Sea", WorldConfig(centerLand = false, lowGround = true, noiseMain = 3, noiseDetails = 2, noiseBonus = 0, seaBias = 0.16f))
     )
 }
 
@@ -119,7 +121,8 @@ object WorldGen {
         val nWarp = Noise(seed * 13 + 5)
 
         progress("Raising mountains...")
-        val fm = 1.5f + cfg.noiseMain * 0.35f
+        val sc = sqrt(size / 128f).coerceIn(1f, 2.4f)   // bigger worlds get more continents, not just bigger ones
+        val fm = (1.5f + cfg.noiseMain * 0.35f) * sc
         val ox = rnd.nextFloat() * 200f
         val oy = rnd.nextFloat() * 200f
         val elev = FloatArray(w * h)
@@ -146,6 +149,7 @@ object WorldGen {
                 if (cfg.centerLand) e += (1f - smooth(0f, 0.6f, r)) * 0.22f
                 if (cfg.centerLake) e -= (1f - smooth(0f, 0.28f, r)) * 0.6f
                 if (cfg.lowGround) e -= 0.10f
+                e -= cfg.seaBias
                 if (cfg.highGround) e += 0.12f
                 if (cfg.removeMountains) e = min(e, 0.70f)
                 if (cfg.mountainEdges && sq > 0.93f) e = 0.9f
@@ -163,7 +167,7 @@ object WorldGen {
                 val dx = (u - 0.5f) * 2f
                 val dy = (v - 0.5f) * 2f
                 val r = sqrt(dx * dx + dy * dy)
-                val moisture = if (cfg.randomBiomes) nBio.fbm(u * 4f + 10f, v * 4f + 10f, 3) else 0.5f
+                val moisture = if (cfg.randomBiomes) nBio.fbm(u * 4f * sc + 10f, v * 4f * sc + 10f, 3) else 0.5f
                 var temp = 0.62f + (nBio.fbm(u * 2f + 70f, v * 2f + 70f, 2) - 0.5f) * 0.4f - (e - 0.45f) * 0.6f
                 val polar = min(v, 1f - v)
                 if (polar < 0.07f) temp -= (0.07f - polar) * 6f
@@ -205,7 +209,7 @@ object WorldGen {
                 for (x in 0 until w) {
                     val i = y * w + x
                     if (world.tiles[i].toInt() == Tile.GRASS) {
-                        val vv = nVeg.fbm(x / w.toFloat() * 7f, y / h.toFloat() * 7f, 3)
+                        val vv = nVeg.fbm(x / w.toFloat() * 7f * sc, y / h.toFloat() * 7f * sc, 3)
                         if (vv > thr && rnd.nextFloat() < 0.85f) world.tiles[i] = Tile.FOREST.toByte()
                         else if (rnd.nextFloat() < 0.01f) world.tiles[i] = Tile.FOREST.toByte()
                     }
@@ -220,8 +224,56 @@ object WorldGen {
                 if ((t == Tile.MOUNTAIN || t == Tile.HILLS) && rnd.nextFloat() < 0.05f) world.ore[i] = 1
             }
         }
+        if (cfg.populate) {
+            progress("Breeding animals and tribes...")
+            populate(world, Random(seed * 7 + 1))
+        }
         world.markAllDirty()
         progress("Splitting atoms...")
         return world
+    }
+
+    /** Scatters herds, predators and a few starting tribes so a new world is alive straight away. */
+    fun populate(world: World, rnd: Random) {
+        val area = world.w * world.h
+        fun spot(pred: (Int) -> Boolean): Pair<Float, Float>? {
+            repeat(80) {
+                val x = rnd.nextInt(world.w)
+                val y = rnd.nextInt(world.h)
+                if (pred(world.tileAt(x, y))) return Pair(x + 0.5f, y + 0.5f)
+            }
+            return null
+        }
+        val herb = listOf("sheep", "cow", "chicken", "rabbit", "pig", "deer", "goat")
+        repeat(area / 2500) {
+            val p = spot { it == Tile.GRASS || it == Tile.FOREST } ?: return@repeat
+            val key = herb[rnd.nextInt(herb.size)]
+            repeat(3 + rnd.nextInt(4)) { world.spawnAt(key, p.first, p.second, 3) }
+        }
+        val carn = listOf("wolf", "fox", "bear", "cat")
+        repeat(area / 12000) {
+            val p = spot { it == Tile.GRASS || it == Tile.FOREST } ?: return@repeat
+            val key = carn[rnd.nextInt(carn.size)]
+            repeat(1 + rnd.nextInt(3)) { world.spawnAt(key, p.first, p.second, 3) }
+        }
+        repeat(area / 20000) {
+            val p = spot { it == Tile.SAND } ?: return@repeat
+            repeat(2 + rnd.nextInt(3)) { world.spawnAt("crab", p.first, p.second, 3) }
+        }
+        val tribes = area / 20000
+        val taken = ArrayList<Pair<Float, Float>>()
+        var tries = 0
+        while (taken.size < tribes && tries < tribes * 12) {
+            tries++
+            val p = spot { it == Tile.GRASS || it == Tile.SOIL } ?: continue
+            if (taken.any { (it.first - p.first) * (it.first - p.first) + (it.second - p.second) * (it.second - p.second) < 40f * 40f }) continue
+            val r = rnd.nextInt(10)
+            val sp = when { r < 7 -> Sp.HUMAN; r == 7 -> Sp.ELF; r == 8 -> Sp.ORC; else -> Sp.DWARF }
+            world.spawnTribe(sp, p.first, p.second)
+            taken.add(p)
+        }
+        world.drainSounds()
+        world.drainToasts()
+        world.history.clear()
     }
 }

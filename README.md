@@ -15,6 +15,14 @@ kingdoms that trade, fight and burn. Free for everyone:
 
 - **Pixel-art everything:** every creature, tree and house is a real sprite (walk cycles, facing,
   kingdom-coloured roofs that grow from huts to big houses). Terrain has relief shading and foam shorelines.
+- **Titan worlds:** new worlds default to 704×704 tiles, about 30 times the area of the standard size
+  (sizes go from Tiny 64 to Titan 704). Bigger worlds get more continents, islands and mountain ranges,
+  and new worlds start with herds, predators and tribes already living in them.
+- **Daily life you can watch:** villagers have jobs. Woodcutters chop trees with axes, farmers work the
+  fields with hoes, miners swing pickaxes, builders raise new houses with hammers, hunters carry spears.
+  They carry wood, crops, ore and meat home, **walk into their houses** to store it, eat and rest, and
+  sleep inside at night while windows glow and chimneys smoke. Tools and carried goods are drawn on them.
+  Mined ore improves a village's tools, so work gets faster.
 - **Living world:** villages build houses and farm fields, kingdoms form, wage war and **capture villages**,
   fires spread, volcanoes erupt, zombies infect, dragons burn.
 - **55+ powers** in six tabs, three brush-size steps, speed control, 7 world ages with events.

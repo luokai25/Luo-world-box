@@ -32,6 +32,15 @@ class Creature(
     var alive: Boolean = true
     var fleeing: Boolean = false
     var faceRight: Boolean = true
+    // daily life of villagers
+    var job: Int = 0
+    var act: Int = 0
+    var actTimer: Float = 0f
+    var workTile: Int = -1
+    var homeIdx: Int = -1
+    var inside: Boolean = false
+    var sleeping: Boolean = false
+    var carry: Int = 0
     var chase: Creature? = null
 
     val isAdult: Boolean get() = age >= sp.adultAge
@@ -45,6 +54,11 @@ class Village(val id: Int, val name: String, val speciesId: Int, var cx: Float, 
     var emptyTime: Float = 0f
     var buildCd: Float = 0f
     val fields = ArrayList<Int>()   // farm tiles
+    var wood: Int = 6
+    var ore: Int = 0
+    var tech: Int = 0               // tool level, makes work faster
+    var site: Int = -1              // house under construction (tile index)
+    var siteProgress: Int = 0
     var fieldCd: Float = 0f
     val radius: Float get() = 5f + Math.sqrt(houses.size.toDouble()).toFloat() * 2.2f
 }
@@ -82,6 +96,24 @@ class Fx(val type: Int, val x: Float, val y: Float, val life: Float, val r: Floa
         const val LIGHTNING = 1
         const val RING = 2
     }
+}
+
+object Act {
+    const val IDLE = 0
+    const val GOTO_WORK = 1
+    const val WORK = 2
+    const val RETURN = 3
+    const val INSIDE = 4
+}
+
+object Job {
+    const val NONE = 0
+    const val WOOD = 1
+    const val FARM = 2
+    const val MINE = 3
+    const val BUILD = 4
+    const val HUNT = 5
+    val NAMES = arrayOf("none", "Woodcutter", "Farmer", "Miner", "Builder", "Hunter")
 }
 
 class Laws : Serializable {
