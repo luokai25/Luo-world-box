@@ -1,6 +1,7 @@
 package com.luokai.luoworldbox
 
 import com.luokai.luoworldbox.core.Sp
+import com.luokai.luoworldbox.core.Tile
 
 enum class Tab(val title: String, val icon: String) {
     SHAPING("World Shaping", "⛰"),
@@ -22,22 +23,23 @@ class Power(
     val tab: Tab,
     val repeatMs: Int,
     val brush: Boolean,
-    val inspect: Boolean = false
+    val inspect: Boolean = false,
+    val tile: Int = -1          // >= 0: draw a terrain swatch instead of an emoji
 )
 
 object Powers {
     val ALL: List<Power> = buildList {
         // ---- World shaping
-        add(Power("deep", "Deep Ocean", "🌊", Tab.SHAPING, 30, true))
-        add(Power("shallow", "Ocean", "💧", Tab.SHAPING, 30, true))
-        add(Power("sand", "Sand", "🏖", Tab.SHAPING, 30, true))
-        add(Power("soil", "Soil", "🟫", Tab.SHAPING, 30, true))
-        add(Power("grass", "Grass", "🌱", Tab.SHAPING, 30, true))
-        add(Power("forest", "Forest", "🌲", Tab.SHAPING, 30, true))
-        add(Power("hills", "Hills", "⛰", Tab.SHAPING, 30, true))
-        add(Power("mountain", "Mountain", "🗻", Tab.SHAPING, 30, true))
-        add(Power("snow", "Snow", "❄", Tab.SHAPING, 30, true))
-        add(Power("lava", "Lava", "🌋", Tab.SHAPING, 30, true))
+        add(Power("deep", "Deep Ocean", "🌊", Tab.SHAPING, 30, true, tile = Tile.DEEP))
+        add(Power("shallow", "Ocean", "💧", Tab.SHAPING, 30, true, tile = Tile.SHALLOW))
+        add(Power("sand", "Sand", "🏖", Tab.SHAPING, 30, true, tile = Tile.SAND))
+        add(Power("soil", "Soil", "🟫", Tab.SHAPING, 30, true, tile = Tile.SOIL))
+        add(Power("grass", "Grass", "🌱", Tab.SHAPING, 30, true, tile = Tile.GRASS))
+        add(Power("forest", "Forest", "🌲", Tab.SHAPING, 30, true, tile = Tile.FOREST))
+        add(Power("hills", "Hills", "⛰", Tab.SHAPING, 30, true, tile = Tile.HILLS))
+        add(Power("mountain", "Mountain", "🗻", Tab.SHAPING, 30, true, tile = Tile.MOUNTAIN))
+        add(Power("snow", "Snow", "❄", Tab.SHAPING, 30, true, tile = Tile.SNOW))
+        add(Power("lava", "Lava", "🌋", Tab.SHAPING, 30, true, tile = Tile.LAVA))
         add(Power("pickaxe", "Pickaxe", "⛏", Tab.SHAPING, 60, true))
         add(Power("sickle", "Sickle", "🌾", Tab.SHAPING, 60, true))
         add(Power("sponge", "Sponge", "🧽", Tab.SHAPING, 40, true))
@@ -59,12 +61,13 @@ object Powers {
 
         // ---- Nature & disasters
         add(Power("heat", "Heat", "🌡", Tab.NATURE, 100, true))
-        add(Power("cold", "Cold", "🧊", Tab.NATURE, 100, true))
+        add(Power("cold", "Cold", "🌬", Tab.NATURE, 100, true))
         add(Power("lightning", "Lightning", "⚡", Tab.NATURE, 250, false))
         add(Power("rain", "Rain", "🌧", Tab.NATURE, 0, false))
         add(Power("tornado", "Tornado", "🌪", Tab.NATURE, 0, false))
         add(Power("fire", "Fire", "🔥", Tab.NATURE, 100, true))
-        add(Power("earthquake", "Earthquake", "🫨", Tab.NATURE, 0, false))
+        add(Power("earthquake", "Earthquake", "🏚", Tab.NATURE, 0, false))
+        add(Power("volcano", "Volcano", "🌋", Tab.NATURE, 0, false))
         add(Power("meteor", "Meteor", "☄", Tab.NATURE, 400, false))
         add(Power("acid", "Acid Rain", "🧪", Tab.NATURE, 0, false))
 

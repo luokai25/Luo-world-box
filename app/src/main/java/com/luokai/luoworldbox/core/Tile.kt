@@ -13,6 +13,7 @@ object Tile {
     const val SNOW = 8
     const val LAVA = 9
     const val WASTE = 10
+    const val FIELD = 11
 
     private fun c(rgb: Int): Int = rgb or (0xFF shl 24)
 
@@ -27,9 +28,10 @@ object Tile {
         c(0x55575C), // mountain
         c(0xF0F4F8), // snow
         c(0xE8480C), // lava
-        c(0x4A4038)  // wasteland (burnt)
+        c(0x4A4038), // wasteland (burnt)
+        c(0xC9B24A)  // farm field
     )
 
     fun isWater(t: Int) = t == DEEP || t == SHALLOW
-    fun isFlammable(t: Int) = t == GRASS || t == FOREST
+    fun isFlammable(t: Int) = t == GRASS || t == FOREST || t == FIELD
 }

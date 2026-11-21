@@ -11,6 +11,16 @@ kingdoms that trade, fight and burn. Free for everyone:
 > Luo World Box is an independent game. All code and art are written for this project;
 > it uses no assets or code from other games.
 
+## What is in the game
+
+- **Pixel-art everything:** every creature, tree and house is a real sprite (walk cycles, facing,
+  kingdom-coloured roofs that grow from huts to big houses). Terrain has relief shading and foam shorelines.
+- **Living world:** villages build houses and farm fields, kingdoms form, wage war and **capture villages**,
+  fires spread, volcanoes erupt, zombies infect, dragons burn.
+- **55+ powers** in six tabs, three brush-size steps, speed control, 7 world ages with events.
+- **Minimap**, event toasts, world history, population graph, three save slots plus autosave.
+- **Synthesised sound effects** (no audio files shipped) and saved settings.
+
 ## Install
 
 1. Open the latest [release](../../releases/latest) on your phone.

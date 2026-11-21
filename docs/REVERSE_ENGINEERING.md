@@ -38,6 +38,8 @@ Legend: ✅ built · 🟡 built in a simpler form · ⬜ not built yet
 | 5 | Destruction and Chaos | TNT, Bomb, Atomic Bomb, Napalm, Black Hole |
 | 6 | Other various powers | Magnet, Feast, Divine Finger |
 
+Nature also has Volcano. Creature icons in the power bar are the in-game sprites; terrain icons are tile swatches.
+
 The reference has many more icons per tab (the scroll rows are long). More powers are listed under "Next".
 
 ## Simulation rules implemented
@@ -59,4 +61,5 @@ The reference has many more icons per tab (the scroll rows are long). More power
 3. Subspecies, cultures, languages, religions, clans, families.
 4. Heroes (favorites), epic items, plots, alliances.
 5. More powers per tab (more animals and monsters, more disasters, tools, weather).
-6. Sprites instead of emoji and pixel-rects for creatures.
+6. Hand-drawn sprite sheets (the current sprites are generated in code).
+7. Music, more sound effects, weather visuals.

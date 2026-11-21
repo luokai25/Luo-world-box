@@ -31,6 +31,7 @@ class Creature(
     var kills: Int = 0
     var alive: Boolean = true
     var fleeing: Boolean = false
+    var faceRight: Boolean = true
     var chase: Creature? = null
 
     val isAdult: Boolean get() = age >= sp.adultAge
@@ -43,6 +44,8 @@ class Village(val id: Int, val name: String, val speciesId: Int, var cx: Float, 
     var pop: Int = 0
     var emptyTime: Float = 0f
     var buildCd: Float = 0f
+    val fields = ArrayList<Int>()   // farm tiles
+    var fieldCd: Float = 0f
     val radius: Float get() = 5f + Math.sqrt(houses.size.toDouble()).toFloat() * 2.2f
 }
 
@@ -66,6 +69,7 @@ class Zone(val type: Int, var x: Float, var y: Float, var r: Float, var life: Fl
         const val TORNADO = 2
         const val BLACKHOLE = 3
         const val METEOR = 4
+        const val VOLCANO = 5
     }
 }
 

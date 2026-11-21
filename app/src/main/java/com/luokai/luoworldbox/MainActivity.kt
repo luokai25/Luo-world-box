@@ -32,7 +32,10 @@ import java.util.Date
 class MainActivity : Activity(), GameView.Host {
 
     private lateinit var view: GameView
+    private lateinit var sfx: Sfx
     private var openDialogs = 0
+
+    private val prefs by lazy { getSharedPreferences("luo", MODE_PRIVATE) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -42,6 +45,11 @@ class MainActivity : Activity(), GameView.Host {
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         }
         view = GameView(this, this)
+        sfx = Sfx(this)
+        view.sfx = sfx
+        view.showBorders = prefs.getBoolean("borders", true)
+        view.showMini = prefs.getBoolean("mini", true)
+        sfx.enabled = prefs.getBoolean("sound", true)
         setContentView(view)
         enterImmersive()
 
@@ -66,6 +74,11 @@ class MainActivity : Activity(), GameView.Host {
         super.onPause()
         view.appPaused = true
         view.saveNowBlocking()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        sfx.release()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -130,36 +143,36 @@ class MainActivity : Activity(), GameView.Host {
     // ------------------------------------------------------------------ menu
     override fun openMenu() {
         runOnUiThread {
-            val items = arrayOf(
-                "Statistics and Kingdoms",
-                "Population Graph",
-                "World History",
-                "World Laws",
-                "World Ages",
-                "New World",
-                "Save World",
-                "Load World",
-                if (view.showBorders) "Kingdom borders: ON" else "Kingdom borders: OFF",
-                "How to play",
-                "About"
-            )
-            present(AlertDialog.Builder(this).setTitle("Luo World Box").setItems(items) { _, which ->
-                when (which) {
-                    0 -> view.queryGame({ Report.full(it) }) { showInfo("Statistics", it) }
-                    1 -> showGraph()
-                    2 -> view.queryGame({ w ->
-                        if (w.history.isEmpty()) "Nothing has happened yet." else w.history.asReversed().joinToString("\n\n")
-                    }) { showInfo("World History", it) }
-                    3 -> showLaws()
-                    4 -> showAges()
-                    5 -> showTemplates()
-                    6 -> showSlots(true)
-                    7 -> showSlots(false)
-                    8 -> { view.showBorders = !view.showBorders }
-                    9 -> showWelcome()
-                    10 -> showAbout()
-                }
-            }.setNegativeButton("Back to game", null))
+            val entries = ArrayList<Pair<String, () -> Unit>>()
+            entries.add("Statistics and Kingdoms" to { view.queryGame({ Report.full(it) }) { showInfo("Statistics", it) } })
+            entries.add("Population Graph" to { showGraph() })
+            entries.add("World History" to {
+                view.queryGame({ w ->
+                    if (w.history.isEmpty()) "Nothing has happened yet." else w.history.asReversed().joinToString("\n\n")
+                }) { showInfo("World History", it) }
+            })
+            entries.add("World Laws" to { showLaws() })
+            entries.add("World Ages" to { showAges() })
+            entries.add("New World" to { showTemplates() })
+            entries.add("Save World" to { showSlots(true) })
+            entries.add("Load World" to { showSlots(false) })
+            entries.add((if (view.showBorders) "Kingdom borders: ON" else "Kingdom borders: OFF") to {
+                view.showBorders = !view.showBorders
+                prefs.edit().putBoolean("borders", view.showBorders).apply()
+            })
+            entries.add((if (view.showMini) "Minimap: ON" else "Minimap: OFF") to {
+                view.showMini = !view.showMini
+                prefs.edit().putBoolean("mini", view.showMini).apply()
+            })
+            entries.add((if (sfx.enabled) "Sound: ON" else "Sound: OFF") to {
+                sfx.enabled = !sfx.enabled
+                prefs.edit().putBoolean("sound", sfx.enabled).apply()
+            })
+            entries.add("How to play" to { showWelcome() })
+            entries.add("About" to { showAbout() })
+            present(AlertDialog.Builder(this).setTitle("Luo World Box")
+                .setItems(entries.map { it.first }.toTypedArray()) { _, which -> entries[which].second() }
+                .setNegativeButton("Back to game", null))
         }
     }
 
@@ -171,7 +184,7 @@ class MainActivity : Activity(), GameView.Host {
             "• Tap a creature or village in move mode to inspect it.\n" +
             "• The round button at the top left changes the brush size.\n" +
             "• Spawn humans, elves, orcs or dwarves and watch villages, kingdoms and wars appear.\n" +
-            "• The ☰ button opens statistics, world laws, ages and save slots.\n\n" +
+            "• The ☰ button opens statistics, history, world laws, ages, save slots and settings.\n• Tap the minimap (top right) to jump around the world.\n\n" +
             "Everything is unlocked. There are no ads and no purchases. Your world is auto-saved when you leave."
         present(AlertDialog.Builder(this).setTitle("Welcome").setMessage(msg).setPositiveButton("Let's play", null))
     }

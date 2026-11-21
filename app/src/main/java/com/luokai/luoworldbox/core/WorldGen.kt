@@ -185,8 +185,7 @@ object WorldGen {
                         else Tile.GRASS
                     }
                     e < 0.85f -> if (temp < 0.18f) Tile.SNOW else Tile.HILLS
-                    e < 0.97f -> Tile.MOUNTAIN
-                    else -> Tile.SNOW
+                    else -> if (e > 0.99f || temp < 0.30f) Tile.SNOW else Tile.MOUNTAIN
                 }
                 world.tiles[i] = t.toByte()
                 if (cfg.treeRing && (t == Tile.GRASS || t == Tile.SOIL) && r in 0.62f..0.72f) {

@@ -53,6 +53,8 @@ object Sp {
     val CHICKEN = r("chicken", "Chicken", Kind.HERBIVORE, "🐔", 0xF5E3A0, 1.3f, 8f, 1f, 15f, 0f, 6f)
     val RABBIT = r("rabbit", "Rabbit", Kind.HERBIVORE, "🐇", 0xD8C8B8, 2.0f, 7f, 1f, 12f, 0f, 7f)
     val PIG = r("pig", "Pig", Kind.HERBIVORE, "🐖", 0xF0A8A8, 1.1f, 15f, 2f, 50f, 0f, 6f)
+    val DEER = r("deer", "Deer", Kind.HERBIVORE, "🦌", 0xB07A4A, 2.3f, 16f, 2f, 55f, 0f, 8f)
+    val GOAT = r("goat", "Goat", Kind.HERBIVORE, "🐐", 0xE8E4D8, 1.4f, 15f, 1.5f, 45f, 0f, 6f, climbs = true)
     val DOG = r("dog", "Dog", Kind.HERBIVORE, "🐕", 0xB88A5A, 2.2f, 15f, 2f, 55f, 6f, 6f)
     val CRAB = r("crab", "Crab", Kind.HERBIVORE, "🦀", 0xE05A3A, 1.0f, 10f, 1f, 30f, 4f, 5f, swims = true)
 

@@ -16,6 +16,7 @@ import com.luokai.luoworldbox.core.Fx
 import com.luokai.luoworldbox.core.Kind
 import com.luokai.luoworldbox.core.Report
 import com.luokai.luoworldbox.core.SaveStore
+import com.luokai.luoworldbox.core.TileRender
 import com.luokai.luoworldbox.core.STEP
 import com.luokai.luoworldbox.core.Tile
 import com.luokai.luoworldbox.core.World
@@ -45,6 +46,9 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
     @Volatile var appPaused = false
     @Volatile var paused = false
     @Volatile var showBorders = true
+    @Volatile var showMini = true
+    @Volatile var sfx: Sfx? = null
+    private val sprites = SpriteBank()
     private val ui = Handler(Looper.getMainLooper())
     private val cmds = ConcurrentLinkedQueue<Runnable>()
     private var thread: Thread? = null
@@ -71,6 +75,7 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
     private val MODE_PAN = 2
     private val MODE_PAINT = 3
     private val MODE_ZOOM = 4
+    private val MODE_MINI = 5
     @Volatile private var mode = MODE_NONE
     @Volatile private var paintX = 0f
     @Volatile private var paintY = 0f
@@ -203,6 +208,7 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
                     var n = 0
                     while (acc >= STEP && n < 10) { w.step(STEP); acc -= STEP; n++ }
                     if (n == 10) acc = 0f
+                    for (snd in w.drainSounds()) sfx?.play(snd)
                     for (t in w.drainToasts()) {
                         toasts.add(t); toastLife.add(6f)
                         if (toasts.size > 5) { toasts.removeAt(0); toastLife.removeAt(0) }
@@ -289,10 +295,14 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
                 downX = ev.x; downY = ev.y; lastX = ev.x; lastY = ev.y
                 downT = ev.eventTime; moved = false
                 menuRect(rect)
+                val mr = RectF(); miniRect(mr)
+                val inMini = showMini && mr.contains(ev.x, ev.y)
+                if (inMini) jumpToMini(ev.x, ev.y, mr)
                 val inMenu = rect.contains(ev.x, ev.y)
                 val inBrush = RectF().also { brushRect(it) }.contains(ev.x, ev.y)
                 val p = selected
                 mode = when {
+                    inMini -> MODE_MINI
                     ev.y >= barTop -> { hudStartX = ev.x; hudScrollStart = scrollX; MODE_HUD }
                     inMenu || inBrush -> MODE_NONE
                     p != null && !p.inspect -> {
@@ -326,6 +336,7 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
                         clampCamera()
                     }
                     MODE_PAINT -> { paintX = ev.x; paintY = ev.y }
+                    MODE_MINI -> { val mr = RectF(); miniRect(mr); jumpToMini(ev.x, ev.y, mr) }
                     MODE_ZOOM -> if (ev.pointerCount >= 2) {
                         val mx = (ev.getX(0) + ev.getX(1)) / 2f
                         val my = (ev.getY(0) + ev.getY(1)) / 2f
@@ -428,6 +439,17 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
         })
     }
 
+    private fun miniRect(r: RectF) {
+        val sz = 84f * dp
+        r.set(width - pad - sz, 28f * dp + 46f * dp + 8f * dp, width - pad, 28f * dp + 46f * dp + 8f * dp + sz)
+    }
+
+    private fun jumpToMini(x: Float, y: Float, r: RectF) {
+        val w = world ?: return
+        camX = ((x - r.left) / r.width() * w.w).coerceIn(0f, w.w.toFloat())
+        camY = ((y - r.top) / r.height() * w.h).coerceIn(0f, w.h.toFloat())
+    }
+
     private fun minZoom(): Float {
         val w = world ?: return 1f
         return min(width / w.w.toFloat(), height / w.h.toFloat()) * 0.6f
@@ -440,26 +462,6 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
     }
 
     // ------------------------------------------------------------------ rendering
-    private fun scaleColor(c: Int, f: Float): Int {
-        val r = min(255, ((c shr 16 and 255) * f).toInt())
-        val g = min(255, ((c shr 8 and 255) * f).toInt())
-        val b = min(255, ((c and 255) * f).toInt())
-        return (0xFF shl 24) or (r shl 16) or (g shl 8) or b
-    }
-
-    private fun tileColor(w: World, i: Int, x: Int, y: Int): Int {
-        val t = w.tiles[i].toInt()
-        val hsh = ((x * 73856093) xor (y * 19349663)) and 0xFF
-        var c = scaleColor(Tile.COLORS[t], 0.93f + hsh / 255f * 0.14f)
-        val f = w.fire[i].toInt() and 0xFF
-        if (f != 0) {
-            c = if (((hsh + frame) and 3) < 2) 0xFFFF8A1F.toInt() else 0xFFE03A0A.toInt()
-        } else if (w.ore[i].toInt() != 0 && (t == Tile.MOUNTAIN || t == Tile.HILLS)) {
-            c = scaleColor(c, 1.45f)
-        }
-        return c
-    }
-
     private fun refreshBitmap(w: World) {
         if (bmpWorld !== w || bitmap == null) {
             bitmap?.recycle()
@@ -473,7 +475,7 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
             val y1 = min(w.h - 1, w.dirtyMax)
             for (y in y0..y1) for (x in 0 until w.w) {
                 val i = y * w.w + x
-                px[i] = tileColor(w, i, x, y)
+                px[i] = TileRender.color(w, i, x, y, frame)
             }
             bitmap!!.setPixels(px, y0 * w.w, w.w, 0, y0, w.w, y1 - y0 + 1)
             w.clearDirty()
@@ -510,41 +512,36 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
         if (showBorders && s >= 1.0f) drawVillages(canvas, w, s, ox, oy)
 
         // trees
-        if (s >= 7f) {
+        if (s >= 5f) {
+            val ts = s * 1.55f
             for (y in vy0..vy1) for (x in vx0..vx1) {
-                if (w.tiles[y * w.w + x].toInt() == Tile.FOREST && w.fire[y * w.w + x].toInt() == 0) {
+                val i = y * w.w + x
+                if (w.tiles[i].toInt() == Tile.FOREST && w.fire[i].toInt() == 0) {
+                    val kind = when (TileRender.hash(x, y) and 3) { 0 -> 0; 3 -> 2; else -> 1 }
                     val cx = ox + (x + 0.5f) * s
-                    val cy = oy + (y + 0.5f) * s
-                    fill.color = 0xFF5B3A1E.toInt()
-                    canvas.drawRect(cx - s * 0.06f, cy, cx + s * 0.06f, cy + s * 0.38f, fill)
-                    fill.color = 0xFF1F5A14.toInt()
-                    canvas.drawRect(cx - s * 0.30f, cy - s * 0.05f, cx + s * 0.30f, cy + s * 0.22f, fill)
-                    fill.color = 0xFF2F7A1E.toInt()
-                    canvas.drawRect(cx - s * 0.22f, cy - s * 0.28f, cx + s * 0.22f, cy, fill)
-                    fill.color = 0xFF47A02E.toInt()
-                    canvas.drawRect(cx - s * 0.12f, cy - s * 0.42f, cx + s * 0.12f, cy - s * 0.2f, fill)
+                    val bottom = oy + (y + 1f) * s
+                    dst.set(cx - ts / 2, bottom - ts, cx + ts / 2, bottom)
+                    canvas.drawBitmap(sprites.tree(kind), null, dst, bmpPaint)
                 }
             }
         }
 
         // houses
-        if (s >= 3f) {
+        if (s >= 2.5f) {
+            val hs = s * 1.6f
             for (v in w.villages) {
                 val k = w.kingdomById(v.kingdomId)
                 val roof = k?.color ?: 0xFFCC4444.toInt()
+                val tier = if (v.houses.size < 3) 0 else if (v.houses.size < 8) 1 else 2
+                val spr = sprites.house(tier, roof)
                 for (hi in v.houses) {
                     val hx = hi % w.w
                     val hy = hi / w.w
                     if (hx < vx0 || hx > vx1 || hy < vy0 || hy > vy1) continue
                     val cx = ox + (hx + 0.5f) * s
-                    val cy = oy + (hy + 0.5f) * s
-                    val burn = (w.fire[hi].toInt() and 0xFF) != 0
-                    fill.color = if (burn) 0xFF6A2A10.toInt() else 0xFFE8D2A0.toInt()
-                    canvas.drawRect(cx - s * 0.36f, cy - s * 0.1f, cx + s * 0.36f, cy + s * 0.36f, fill)
-                    fill.color = roof
-                    canvas.drawRect(cx - s * 0.44f, cy - s * 0.38f, cx + s * 0.44f, cy - s * 0.08f, fill)
-                    fill.color = 0xFF5A3A1E.toInt()
-                    canvas.drawRect(cx - s * 0.07f, cy + s * 0.12f, cx + s * 0.07f, cy + s * 0.36f, fill)
+                    val bottom = oy + (hy + 1f) * s
+                    dst.set(cx - hs / 2, bottom - hs, cx + hs / 2, bottom)
+                    canvas.drawBitmap(spr, null, dst, bmpPaint)
                 }
             }
         }
@@ -578,57 +575,45 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
     }
 
     private fun drawCreatures(canvas: Canvas, w: World, s: Float, ox: Float, oy: Float) {
-        val big = s >= 10f
-        val size = (s * 0.9f).coerceIn(3f * dp, 60f * dp)
-        if (big) text.textSize = (s * 1.1f).coerceAtMost(80f * dp)
+        val size = max(s * 1.15f, 12f * dp).coerceAtMost(96f * dp)
         for (c in w.creatures) {
             if (!c.alive) continue
             val cx = ox + c.x * s
             val cy = oy + c.y * s
-            if (cx < -50 || cx > width + 50 || cy < -50 || cy > height + 50) continue
+            if (cx < -60 || cx > width + 60 || cy < -60 || cy > height + 60) continue
             val sp = c.sp
             if (s < 2.5f) {
                 fill.color = sp.color
                 canvas.drawRect(cx - 1.5f * dp, cy - 1.5f * dp, cx + 1.5f * dp, cy + 1.5f * dp, fill)
-            } else if (!big) {
-                fill.color = sp.color
-                canvas.drawRect(cx - size / 2, cy - size / 2, cx + size / 2, cy + size / 2, fill)
-                fill.color = 0xFF000000.toInt()
-                canvas.drawRect(cx - size * 0.28f, cy - size * 0.22f, cx - size * 0.1f, cy - size * 0.04f, fill)
-                canvas.drawRect(cx + size * 0.1f, cy - size * 0.22f, cx + size * 0.28f, cy - size * 0.04f, fill)
-                if (sp.kind == Kind.SAPIENT && s >= 4f) {
-                    val k = w.kingdomById(c.kingdomId)
-                    if (k != null) {
-                        fill.color = k.color
-                        canvas.drawRect(cx - size / 2, cy - size / 2 - 3 * dp, cx + size / 2, cy - size / 2, fill)
-                    }
-                }
-            } else {
-                val fm = text.fontMetrics
-                text.color = Color.WHITE
-                text.style = Paint.Style.FILL
-                canvas.drawText(sp.emoji, cx, cy - (fm.ascent + fm.descent) / 2f, text)
-                if (sp.kind == Kind.SAPIENT) {
-                    val k = w.kingdomById(c.kingdomId)
-                    if (k != null) {
-                        fill.color = k.color
-                        canvas.drawCircle(cx, cy + s * 0.55f, 3f * dp, fill)
-                    }
+                continue
+            }
+            val moving = c.hasTarget || c.chase != null
+            val frame = if (moving) ((w.time * 6).toInt() + c.id) and 1 else 0
+            val bob = if (moving && frame == 1) -size * 0.04f else 0f
+            val kid = if (!c.isAdult && sp.kind != Kind.MONSTER) 0.7f else 1f
+            val sz = size * kid
+            dst.set(cx - sz / 2, cy - sz * 0.85f + bob, cx + sz / 2, cy + sz * 0.15f + bob)
+            canvas.drawBitmap(sprites.creature(sp, frame, c.faceRight), null, dst, bmpPaint)
+            if (sp.kind == Kind.SAPIENT) {
+                val k = w.kingdomById(c.kingdomId)
+                if (k != null) {
+                    fill.color = k.color
+                    canvas.drawRect(cx - sz * 0.18f, dst.top - 3 * dp, cx + sz * 0.18f, dst.top, fill)
                 }
             }
             if (c.burning > 0f) {
                 fill.color = 0xFFFF7A1A.toInt()
-                canvas.drawRect(cx - 2 * dp, cy - size / 2 - 4 * dp, cx + 2 * dp, cy - size / 2, fill)
+                canvas.drawRect(cx - 2 * dp, dst.top - 6 * dp, cx + 2 * dp, dst.top - 1 * dp, fill)
             }
             if (c.infected >= 0f) {
                 fill.color = 0xFF66FF66.toInt()
-                canvas.drawCircle(cx, cy - size / 2 - 3 * dp, 2.5f * dp, fill)
+                canvas.drawCircle(cx, dst.top - 4 * dp, 2.5f * dp, fill)
             }
-            if (s >= 6f && c.hp < sp.hp) {
+            if (s >= 5f && c.hp < sp.hp) {
                 fill.color = 0xAA000000.toInt()
-                canvas.drawRect(cx - size / 2, cy + size / 2 + 1, cx + size / 2, cy + size / 2 + 3 * dp, fill)
+                canvas.drawRect(cx - sz / 2, dst.bottom + 1, cx + sz / 2, dst.bottom + 1 + 3 * dp, fill)
                 fill.color = 0xFF3DDC55.toInt()
-                canvas.drawRect(cx - size / 2, cy + size / 2 + 1, cx - size / 2 + size * (c.hp / sp.hp).coerceIn(0f, 1f), cy + size / 2 + 3 * dp, fill)
+                canvas.drawRect(cx - sz / 2, dst.bottom + 1, cx - sz / 2 + sz * (c.hp / sp.hp).coerceIn(0f, 1f), dst.bottom + 1 + 3 * dp, fill)
             }
         }
     }
@@ -667,6 +652,16 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
                     canvas.drawCircle(cx, cy, z.r * s * 0.8f, fill)
                     stroke.color = 0xFFB050FF.toInt(); stroke.strokeWidth = 3f * dp
                     canvas.drawCircle(cx, cy, z.r * s * 0.8f + 2 * dp, stroke)
+                }
+                Zone.VOLCANO -> {
+                    fill.color = 0x66E8480C
+                    canvas.drawCircle(cx, cy, z.r * s, fill)
+                    fill.color = 0xFFFFB030.toInt()
+                    for (k in 0 until 5) {
+                        val a = (frame * 0.2f + k * 1.3f)
+                        val rr = (z.r * 0.6f) * s * (0.4f + (k * 0.17f))
+                        canvas.drawCircle(cx + kotlin.math.cos(a) * rr, cy - kotlin.math.abs(sin(a * 1.7f)) * z.r * s * 0.9f, max(2f * dp, s * 0.35f), fill)
+                    }
                 }
                 Zone.METEOR -> {
                     val fall = z.life / 0.9f
@@ -731,7 +726,58 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
         canvas.drawText(e, cx, cy - (fm.ascent + fm.descent) / 2f, text)
     }
 
+    private fun drawPowerIcon(canvas: Canvas, p: Power, cx: Float, cy: Float) {
+        if (p.id.startsWith("spawn:")) {
+            val sp = com.luokai.luoworldbox.core.Sp.byKey(p.id.substring(6))
+            if (sp != null) {
+                val sz = 40f * dp
+                dst.set(cx - sz / 2, cy - sz / 2, cx + sz / 2, cy + sz / 2)
+                canvas.drawBitmap(sprites.creature(sp, 0, true), null, dst, bmpPaint)
+                return
+            }
+        }
+        if (p.tile >= 0) {
+            val half = 17f * dp
+            val cell = half * 2 / 6
+            val base = Tile.COLORS[p.tile]
+            for (gy in 0 until 6) for (gx in 0 until 6) {
+                val f = 0.86f + ((gx * 7 + gy * 13 + p.tile * 5) % 9) / 9f * 0.28f
+                fill.color = TileRender.scale(base, f)
+                canvas.drawRect(cx - half + gx * cell, cy - half + gy * cell, cx - half + (gx + 1) * cell + 0.5f, cy - half + (gy + 1) * cell + 0.5f, fill)
+            }
+            if (p.tile == Tile.FOREST) {
+                val sz = 30f * dp
+                dst.set(cx - sz / 2, cy - sz / 2 - 2 * dp, cx + sz / 2, cy + sz / 2 - 2 * dp)
+                canvas.drawBitmap(sprites.tree(0), null, dst, bmpPaint)
+            }
+            stroke.color = 0xFF101410.toInt(); stroke.strokeWidth = 1.5f * dp
+            canvas.drawRect(cx - half, cy - half, cx + half, cy + half, stroke)
+            return
+        }
+        emoji(canvas, p.icon, cx, cy, 26 * dp)
+    }
+
+    private fun drawMinimap(canvas: Canvas, w: World) {
+        miniRect(rect)
+        val bmp = bitmap ?: return
+        fill.color = 0xAA0A0F1E.toInt()
+        canvas.drawRect(rect.left - 3 * dp, rect.top - 3 * dp, rect.right + 3 * dp, rect.bottom + 3 * dp, fill)
+        canvas.drawBitmap(bmp, null, rect, bmpPaint)
+        stroke.color = 0xCCFFFFFF.toInt(); stroke.strokeWidth = 1.5f * dp
+        canvas.drawRect(rect, stroke)
+        val vw = width / zoom / w.w * rect.width()
+        val vh = height / zoom / w.h * rect.height()
+        val vx = rect.left + (camX / w.w) * rect.width() - vw / 2
+        val vy = rect.top + (camY / w.h) * rect.height() - vh / 2
+        canvas.save()
+        canvas.clipRect(rect)
+        stroke.color = 0xFFFFD27A.toInt()
+        canvas.drawRect(vx, vy, vx + vw, vy + vh, stroke)
+        canvas.restore()
+    }
+
     private fun drawHud(canvas: Canvas, w: World) {
+        if (showMini) drawMinimap(canvas, w)
         if (frame % 30 == 1) {
             var a = 0; var b = 0
             for (c in w.creatures) if (c.alive) { if (c.sp.kind == Kind.SAPIENT) a++ else b++ }
@@ -809,7 +855,7 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
             val on = sel === list[i]
             roundBox(canvas, x, y, x + btn, y + btn, if (on) 0xFF4A4A22.toInt() else 0xFF22282A.toInt(),
                 if (on) 0xFFFFC93C.toInt() else 0xFF5A6A5A.toInt())
-            emoji(canvas, list[i].icon, x + btn / 2, y + btn / 2, 26 * dp)
+            drawPowerIcon(canvas, list[i], x + btn / 2, y + btn / 2)
         }
         canvas.restore()
         // tab title toast

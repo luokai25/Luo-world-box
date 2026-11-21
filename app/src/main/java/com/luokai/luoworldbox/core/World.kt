@@ -16,8 +16,8 @@ const val MONTH_SEC = 1f
 const val MOONS_PER_AGE = 600
 const val STEP = 0.25f
 
-private const val MAX_SAPIENTS = 1200
-private const val MAX_ANIMALS = 1500
+private const val MAX_SAPIENTS = 900
+private const val MAX_ANIMALS = 1000
 private const val MAX_MONSTERS = 250
 private const val CELL = 8
 
@@ -49,6 +49,7 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
     private var lastAge = -1
     private var accPop = 0f
     @Transient private var toastList: ArrayList<String>? = null
+    @Transient private var soundList: ArrayList<String>? = null
     private val burning = ArrayList<Int>()
     private val rnd = Random(seed xor 0x5DEECE66DL)
 
@@ -105,6 +106,20 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
         if (t.size < 12) t.add(msg)
     }
 
+    fun sound(name: String) {
+        var l = soundList
+        if (l == null) { l = ArrayList(); soundList = l }
+        if (l.size < 8) l.add(name)
+    }
+
+    fun drainSounds(): List<String> {
+        val l = soundList ?: return emptyList()
+        if (l.isEmpty()) return emptyList()
+        val out = ArrayList(l.distinct())
+        l.clear()
+        return out
+    }
+
     fun drainToasts(): List<String> {
         val t = toastList ?: return emptyList()
         if (t.isEmpty()) return emptyList()
@@ -119,7 +134,10 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
     fun setTile(i: Int, t: Int) {
         if (tiles[i].toInt() == t) return
         tiles[i] = t.toByte()
-        dirtyRow(i / w)
+        val y = i / w
+        if (y > 0) dirtyRow(y - 1)
+        dirtyRow(y)
+        if (y < h - 1) dirtyRow(y + 1)
     }
 
     // ---------------------------------------------------------------- spatial grid
@@ -572,6 +590,7 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
         val t = tiles[c.y.toInt().coerceIn(0, h - 1) * w + c.x.toInt().coerceIn(0, w - 1)].toInt()
         var sp = c.sp.speed * terrainSlow(t)
         if (c.fleeing || c.burning > 0f) sp *= 1.4f
+        if (abs(dx) > 0.02f) c.faceRight = dx > 0f
         val step = min(sp * dt, d)
         val nx = c.x + dx / d * step
         val ny = c.y + dy / d * step
@@ -670,8 +689,27 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
         val vit = villages.iterator()
         while (vit.hasNext()) {
             val v = vit.next()
-            v.food = min(v.food + v.houses.size * 0.9f * dt * age.growth, 40f + v.houses.size * 10f)
+            v.fields.removeAll { tiles[it].toInt() != Tile.FIELD }
+            v.food = min(v.food + (v.houses.size * 0.9f + v.fields.size * 0.6f) * dt * age.growth, 40f + v.houses.size * 10f)
             v.buildCd -= dt
+            v.fieldCd -= dt
+            if (v.pop >= 4 && v.fieldCd <= 0f && v.fields.size < v.houses.size * 3 / 2 + 1) {
+                v.fieldCd = 5f
+                repeat(8) {
+                    val ang = rnd.nextFloat() * 6.2831855f
+                    val d = 2.5f + rnd.nextFloat() * (v.radius * 0.8f)
+                    val fx = (v.cx + cos(ang) * d).toInt()
+                    val fy = (v.cy + sin(ang) * d).toInt()
+                    if (!inBounds(fx, fy)) return@repeat
+                    val fi = fy * w + fx
+                    val ft = tiles[fi].toInt()
+                    if ((ft == Tile.GRASS || ft == Tile.SOIL) && bld[fi] == 0 && fire[fi].toInt() == 0 && !v.fields.contains(fi)) {
+                        setTile(fi, Tile.FIELD)
+                        v.fields.add(fi)
+                        return@repeat
+                    }
+                }
+            }
             if (v.pop > v.houses.size * 3 - 1 && v.buildCd <= 0f && v.houses.size < 60) {
                 if (buildHouse(v, v.houses.size * 0.4f)) v.buildCd = 6f else v.buildCd = 3f
             }
@@ -679,6 +717,30 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
             if (v.emptyTime > 40f) {
                 for (hi in ArrayList(v.houses)) bld[hi] = 0
                 vit.remove()
+            }
+        }
+        // conquest: an undefended village falls to enemy soldiers standing in it
+        if (laws.wars && kingdoms.size > 1 && wars.isNotEmpty()) {
+            for (v in villages) {
+                var own = 0
+                var enemy = 0
+                var enemyK = -1
+                forEachNear(v.cx, v.cy, v.radius) { c ->
+                    if (c.sp.kind == Kind.SAPIENT && c.isAdult) {
+                        if (c.kingdomId == v.kingdomId) own++
+                        else if (c.kingdomId >= 0 && atWar(c.kingdomId, v.kingdomId)) { enemy++; enemyK = c.kingdomId }
+                    }
+                }
+                if (enemy >= 3 && own == 0 && enemyK >= 0) {
+                    val oldK = kingdomById(v.kingdomId)
+                    val newK = kingdomById(enemyK)
+                    if (newK != null) {
+                        v.kingdomId = enemyK
+                        for (c in creatures) if (c.alive && c.villageId == v.id) c.kingdomId = enemyK
+                        log("${newK.name} captured ${v.name} from ${oldK?.name ?: "its rulers"}")
+                        sound("horn")
+                    }
+                }
             }
         }
         // kingdoms
@@ -695,7 +757,8 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
                 kit.remove()
                 continue
             }
-            if (villageById(k.capitalId) == null) k.capitalId = cap
+            val capV = villageById(k.capitalId)
+            if (capV == null || capV.kingdomId != k.id) k.capitalId = cap
             var pop = 0
             var oldest: Creature? = null
             var king: Creature? = null
@@ -738,7 +801,7 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
                 if (!laws.wars || rnd.nextFloat() < 0.08f) { wars.remove(key); log("${a.name} and ${b.name} made peace") }
             } else if (laws.wars && close < 55f) {
                 val p = if (a.speciesId != b.speciesId) 0.30f else 0.10f
-                if (rnd.nextFloat() < p) { wars.add(key); log("${a.name} declared war on ${b.name}") }
+                if (rnd.nextFloat() < p) { wars.add(key); sound("horn"); log("${a.name} declared war on ${b.name}") }
             }
         }
     }
@@ -866,6 +929,25 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
                 Zone.METEOR -> if (z.life <= 0f) {
                     explode(z.x, z.y, 7f, 0.5f, true, 300f)
                 }
+                Zone.VOLCANO -> {
+                    z.r = 3.5f + 5f * (1f - z.life / z.maxLife)
+                    zoneTiles(z.x, z.y, 2.5f, 3) { i -> removeBuilding(i); fire[i] = 0; setTile(i, Tile.LAVA) }
+                    zoneTiles(z.x, z.y, z.r, 4) { i ->
+                        val t = tiles[i].toInt()
+                        if (t != Tile.LAVA) { removeBuilding(i); fire[i] = 0; setTile(i, Tile.LAVA) }
+                    }
+                    forEachNear(z.x, z.y, z.r) { damage(it, 40f * dt, null); it.burning = 4f }
+                    if (rnd.nextFloat() < 0.08f) fxs().add(Fx(Fx.EXPLOSION, z.x + (rnd.nextFloat() - 0.5f) * z.r, z.y + (rnd.nextFloat() - 0.5f) * z.r, 0.6f, 2.5f))
+                    if (z.life <= 0f) {
+                        val ir = 3
+                        for (oy in -ir..ir) for (ox in -ir..ir) {
+                            if (ox * ox + oy * oy > 9) continue
+                            val x = z.x.toInt() + ox; val y = z.y.toInt() + oy
+                            if (inBounds(x, y)) setTile(y * w + x, Tile.MOUNTAIN)
+                        }
+                        log("A volcano has formed")
+                    }
+                }
             }
             if (z.life <= 0f) zones.removeAt(k) else k++
         }
@@ -896,6 +978,15 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
                 Tile.WASTE -> if (rnd.nextFloat() < 0.05f * a.growth) setTile(i, Tile.SOIL)
                 Tile.SOIL -> if (rnd.nextFloat() < 0.12f * a.growth && neighbourIs(i, Tile.GRASS, Tile.FOREST)) setTile(i, Tile.GRASS)
                 Tile.GRASS -> if (rnd.nextFloat() < 0.008f * a.growth && neighbourIs(i, Tile.FOREST, -1)) setTile(i, Tile.FOREST)
+                Tile.LAVA -> {
+                    val x = i % w; val y = i / w
+                    if (x > 0) ignite(i - 1)
+                    if (x < w - 1) ignite(i + 1)
+                    if (y > 0) ignite(i - w)
+                    if (y < h - 1) ignite(i + w)
+                    val wet = neighbourIs(i, Tile.SHALLOW, Tile.DEEP)
+                    if (rnd.nextFloat() < (if (wet) 0.35f else 0.04f)) setTile(i, Tile.HILLS)
+                }
             }
         }
         // age specific events
@@ -935,6 +1026,7 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
     // ---------------------------------------------------------------- effects
     fun lightning(x: Float, y: Float) {
         fxs().add(Fx(Fx.LIGHTNING, x, y, 0.35f, 0f))
+        sound("zap")
         val xi = x.toInt(); val yi = y.toInt()
         if (!inBounds(xi, yi)) return
         forEachNear(x, y, 1.8f) { damage(it, 80f, null); it.burning = 5f }
@@ -946,6 +1038,7 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
 
     fun explode(cx: Float, cy: Float, r: Float, fireChance: Float, terrain: Boolean, dmg: Float) {
         fxs().add(Fx(Fx.EXPLOSION, cx, cy, 0.8f, r))
+        sound("boom")
         val ir = ceil(r).toInt()
         for (dy in -ir..ir) for (dx in -ir..ir) {
             val d = sqrt((dx * dx + dy * dy).toFloat())
@@ -1010,7 +1103,7 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
         val t = tileAt(xi, yi)
         if (!sp.flies && !sp.swims && (t == Tile.DEEP || t == Tile.MOUNTAIN || t == Tile.LAVA)) return
         if (sp.swims && t == Tile.MOUNTAIN) return
-        spawn(sp, sx, sy, true)
+        if (spawn(sp, sx, sy, true) != null) sound("pop")
     }
 
     fun applyPower(id: String, x: Float, y: Float, r: Int) {
@@ -1047,7 +1140,7 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
             // ---- life
             "bless" -> forEachNear(x, y, r + 1.5f) {
                 it.hp = it.sp.hp; it.hunger = 1f; it.burning = 0f; it.infected = -1f; it.mad = 0f
-            }.also { fxs().add(Fx(Fx.RING, x, y, 0.9f, r + 1.5f)) }
+            }.also { fxs().add(Fx(Fx.RING, x, y, 0.9f, r + 1.5f)); sound("bless") }
             "curse" -> forEachNear(x, y, r + 1.5f) { damage(it, it.sp.hp * 0.5f, null); it.mad = 10f }
             "friendship" -> {
                 val ks = HashSet<Int>()
@@ -1101,6 +1194,7 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
             }
             "meteor" -> zones.add(Zone(Zone.METEOR, x, y, 1f, 0.9f))
             "acid" -> zones.add(Zone(Zone.ACID, x, y, 6f, 14f))
+            "volcano" -> { zones.add(Zone(Zone.VOLCANO, x, y, 3.5f, 16f)); sound("boom") }
             // ---- destruction
             "tnt" -> explode(x, y, 4f, 0.2f, true, 150f)
             "bomb" -> explode(x, y, 8f, 0.3f, true, 300f)
