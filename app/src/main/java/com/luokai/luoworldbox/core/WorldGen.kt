@@ -9,7 +9,7 @@ import kotlin.math.sqrt
 enum class Climate { TEMPERATE, FROZEN, DESERT, LUSH }
 
 class WorldConfig(
-    var sizeIndex: Int = 7,
+    var sizeIndex: Int = 9,
     var randomShapes: Boolean = true,
     var noiseMain: Int = 5,
     var noiseDetails: Int = 5,
@@ -37,8 +37,8 @@ class WorldConfig(
     )
 
     companion object {
-        val SIZES = intArrayOf(64, 96, 128, 192, 256, 384, 512, 704)
-        val SIZE_NAMES = arrayOf("Tiny", "Small", "Standard", "Large", "Huge", "Giant", "Colossal", "Titan")
+        val SIZES = intArrayOf(64, 96, 128, 192, 256, 384, 512, 704, 1280, 2224)
+        val SIZE_NAMES = arrayOf("Tiny", "Small", "Standard", "Large", "Huge", "Giant", "Colossal", "Titan", "Gargantuan", "Cosmic")
     }
 }
 
@@ -107,6 +107,9 @@ object WorldGen {
         return t * t * (3 - 2 * t)
     }
 
+    /** Pseudo-random 0..1 from a tile position; thread safe, so generation can run on every core. */
+    private fun rand01(x: Int, y: Int, salt: Int): Float = TileRender.hash(x + salt * 7919, y * 31 + salt) / 255f
+
     fun generate(cfg: WorldConfig, seed: Long, progress: (String) -> Unit = {}): World {
         val size = WorldConfig.SIZES[cfg.sizeIndex.coerceIn(0, WorldConfig.SIZES.size - 1)]
         val w = size
@@ -120,28 +123,38 @@ object WorldGen {
         val nVeg = Noise(seed + 1234)
         val nWarp = Noise(seed * 13 + 5)
 
-        progress("Raising mountains...")
-        val sc = sqrt(size / 128f).coerceIn(1f, 2.4f)   // bigger worlds get more continents, not just bigger ones
+        // bigger worlds get more continents and mountain ranges, not just bigger ones
+        val sc = sqrt(size / 128f).coerceIn(1f, 4.5f)
         val fm = (1.5f + cfg.noiseMain * 0.35f) * sc
         val ox = rnd.nextFloat() * 200f
         val oy = rnd.nextFloat() * 200f
-        val elev = FloatArray(w * h)
+        val vegThr = when (cfg.climate) {
+            Climate.LUSH -> 0.38f
+            Climate.FROZEN -> 0.62f
+            else -> 0.52f
+        }
 
-        for (y in 0 until h) {
+        progress("Raising mountains and filling oceans...")
+        // One pass per row, rows run in parallel. Nothing is stored except the final tile, so a
+        // 5 million tile world needs no temporary arrays.
+        java.util.stream.IntStream.range(0, h).parallel().forEach { y ->
             for (x in 0 until w) {
+                val i = y * w + x
                 var u = x / w.toFloat()
                 var v = y / h.toFloat()
                 if (cfg.randomShapes) {
-                    u += (nWarp.fbm(u * 3f + 40f, v * 3f, 2) - 0.5f) * 0.25f
-                    v += (nWarp.fbm(u * 3f, v * 3f + 80f, 2) - 0.5f) * 0.25f
+                    u += (nWarp.fbm(u * 3f * sc + 40f, v * 3f * sc, 2) - 0.5f) * 0.25f
+                    v += (nWarp.fbm(u * 3f * sc, v * 3f * sc + 80f, 2) - 0.5f) * 0.25f
                 }
                 var e = nMain.fbm(u * fm + ox, v * fm + oy, 4)
                 e = (e - 0.5f) * 2.1f + 0.56f
                 e += (nDet.fbm(u * fm * 4f + ox, v * fm * 4f + oy, 2) - 0.5f) * cfg.noiseDetails * 0.05f
-                e += (nBonus.value(u * 9f, v * 9f) - 0.5f) * cfg.noiseBonus * 0.04f
+                e += (nBonus.value(u * 9f * sc, v * 9f * sc) - 0.5f) * cfg.noiseBonus * 0.04f
 
-                val dx = (x / w.toFloat() - 0.5f) * 2f
-                val dy = (y / h.toFloat() - 0.5f) * 2f
+                val u0 = x / w.toFloat()
+                val v0 = y / h.toFloat()
+                val dx = (u0 - 0.5f) * 2f
+                val dy = (v0 - 0.5f) * 2f
                 val r = sqrt(dx * dx + dy * dy)
                 val sq = max(abs(dx), abs(dy))
                 if (cfg.roundEdges) e -= smooth(0.62f, 1.05f, r) * 0.62f
@@ -153,23 +166,10 @@ object WorldGen {
                 if (cfg.highGround) e += 0.12f
                 if (cfg.removeMountains) e = min(e, 0.70f)
                 if (cfg.mountainEdges && sq > 0.93f) e = 0.9f
-                elev[y * w + x] = e
-            }
-        }
 
-        progress("Filling oceans...")
-        for (y in 0 until h) {
-            for (x in 0 until w) {
-                val i = y * w + x
-                val e = elev[i]
-                val u = x / w.toFloat()
-                val v = y / h.toFloat()
-                val dx = (u - 0.5f) * 2f
-                val dy = (v - 0.5f) * 2f
-                val r = sqrt(dx * dx + dy * dy)
-                val moisture = if (cfg.randomBiomes) nBio.fbm(u * 4f * sc + 10f, v * 4f * sc + 10f, 3) else 0.5f
-                var temp = 0.62f + (nBio.fbm(u * 2f + 70f, v * 2f + 70f, 2) - 0.5f) * 0.4f - (e - 0.45f) * 0.6f
-                val polar = min(v, 1f - v)
+                val moisture = if (cfg.randomBiomes) nBio.fbm(u0 * 4f * sc + 10f, v0 * 4f * sc + 10f, 3) else 0.5f
+                var temp = 0.62f + (nBio.fbm(u0 * 2f * sc + 70f, v0 * 2f * sc + 70f, 2) - 0.5f) * 0.4f - (e - 0.45f) * 0.6f
+                val polar = min(v0, 1f - v0)
                 if (polar < 0.07f) temp -= (0.07f - polar) * 6f
                 when (cfg.climate) {
                     Climate.FROZEN -> temp -= 0.45f
@@ -177,7 +177,7 @@ object WorldGen {
                     else -> {}
                 }
 
-                val t: Int = when {
+                var t: Int = when {
                     e < 0.30f -> Tile.DEEP
                     e < 0.40f -> Tile.SHALLOW
                     e < 0.44f -> Tile.SAND
@@ -191,39 +191,16 @@ object WorldGen {
                     e < 0.85f -> if (temp < 0.18f) Tile.SNOW else Tile.HILLS
                     else -> if (e > 0.99f || temp < 0.30f) Tile.SNOW else Tile.MOUNTAIN
                 }
+                if (cfg.treeRing && (t == Tile.GRASS || t == Tile.SOIL) && r in 0.62f..0.72f) t = Tile.FOREST
+                if (t == Tile.GRASS && cfg.spawnVegetation) {
+                    val vv = nVeg.fbm(u0 * 7f * sc, v0 * 7f * sc, 3)
+                    if ((vv > vegThr && rand01(x, y, 1) < 0.85f) || rand01(x, y, 2) < 0.01f) t = Tile.FOREST
+                }
                 world.tiles[i] = t.toByte()
-                if (cfg.treeRing && (t == Tile.GRASS || t == Tile.SOIL) && r in 0.62f..0.72f) {
-                    world.tiles[i] = Tile.FOREST.toByte()
-                }
+                if (cfg.spawnResources && (t == Tile.MOUNTAIN || t == Tile.HILLS) && rand01(x, y, 3) < 0.05f) world.ore[i] = 1
             }
         }
-
         progress("Planting trees...")
-        if (cfg.spawnVegetation) {
-            val thr = when (cfg.climate) {
-                Climate.LUSH -> 0.38f
-                Climate.FROZEN -> 0.62f
-                else -> 0.52f
-            }
-            for (y in 0 until h) {
-                for (x in 0 until w) {
-                    val i = y * w + x
-                    if (world.tiles[i].toInt() == Tile.GRASS) {
-                        val vv = nVeg.fbm(x / w.toFloat() * 7f * sc, y / h.toFloat() * 7f * sc, 3)
-                        if (vv > thr && rnd.nextFloat() < 0.85f) world.tiles[i] = Tile.FOREST.toByte()
-                        else if (rnd.nextFloat() < 0.01f) world.tiles[i] = Tile.FOREST.toByte()
-                    }
-                }
-            }
-        }
-
-        progress("Digging for ore...")
-        if (cfg.spawnResources) {
-            for (i in 0 until w * h) {
-                val t = world.tiles[i].toInt()
-                if ((t == Tile.MOUNTAIN || t == Tile.HILLS) && rnd.nextFloat() < 0.05f) world.ore[i] = 1
-            }
-        }
         if (cfg.populate) {
             progress("Breeding animals and tribes...")
             populate(world, Random(seed * 7 + 1))
@@ -245,22 +222,22 @@ object WorldGen {
             return null
         }
         val herb = listOf("sheep", "cow", "chicken", "rabbit", "pig", "deer", "goat")
-        repeat(area / 2500) {
+        repeat(min(area / 4500, 700)) {
             val p = spot { it == Tile.GRASS || it == Tile.FOREST } ?: return@repeat
             val key = herb[rnd.nextInt(herb.size)]
             repeat(3 + rnd.nextInt(4)) { world.spawnAt(key, p.first, p.second, 3) }
         }
         val carn = listOf("wolf", "fox", "bear", "cat")
-        repeat(area / 12000) {
+        repeat(min(area / 25000, 140)) {
             val p = spot { it == Tile.GRASS || it == Tile.FOREST } ?: return@repeat
             val key = carn[rnd.nextInt(carn.size)]
             repeat(1 + rnd.nextInt(3)) { world.spawnAt(key, p.first, p.second, 3) }
         }
-        repeat(area / 20000) {
+        repeat(min(area / 40000, 80)) {
             val p = spot { it == Tile.SAND } ?: return@repeat
             repeat(2 + rnd.nextInt(3)) { world.spawnAt("crab", p.first, p.second, 3) }
         }
-        val tribes = area / 20000
+        val tribes = min(area / 30000, 110)
         val taken = ArrayList<Pair<Float, Float>>()
         var tries = 0
         while (taken.size < tribes && tries < tribes * 12) {
@@ -274,6 +251,7 @@ object WorldGen {
         }
         world.drainSounds()
         world.drainToasts()
+        world.fxs().clear()
         world.history.clear()
     }
 }

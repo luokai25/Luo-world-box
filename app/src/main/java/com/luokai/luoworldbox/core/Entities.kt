@@ -88,13 +88,18 @@ class Zone(val type: Int, var x: Float, var y: Float, var r: Float, var life: Fl
 }
 
 /** Short-lived visual effects (never saved). */
-class Fx(val type: Int, val x: Float, val y: Float, val life: Float, val r: Float) {
+class Fx(val type: Int, val x: Float, val y: Float, val life: Float, val r: Float, val color: Int = 0) {
     var t: Float = 0f
+    var emitted: Boolean = false
 
     companion object {
         const val EXPLOSION = 0
         const val LIGHTNING = 1
         const val RING = 2
+        const val SPAWN = 3
+        const val POOF = 4
+        const val QUAKE = 5
+        const val CURSE = 6
     }
 }
 

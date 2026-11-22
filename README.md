@@ -13,10 +13,18 @@ kingdoms that trade, fight and burn. Free for everyone:
 
 ## What is in the game
 
+- **Detailed creatures:** 24×24 shaded sprites with 4-frame walk cycles, species details (antlers, tusks,
+  beards, bushy tails, wings), colour variants so villagers are not clones, shadows, kids drawn smaller.
+- **Designed effects:** explosions with shockwave, sparks, smoke and debris plus screen shake; branching
+  lightning with a flash; rain and acid clouds; tornado funnels with swirling debris; black holes with an
+  accretion disk; erupting volcanoes; meteors with fiery trails; flames and smoke on burning land; spawn
+  sparkles; earthquake cracks; sparks when villagers chop, mine and build.
 - **Pixel-art everything:** every creature, tree and house is a real sprite (walk cycles, facing,
   kingdom-coloured roofs that grow from huts to big houses). Terrain has relief shading and foam shorelines.
-- **Titan worlds:** new worlds default to 704×704 tiles, about 30 times the area of the standard size
-  (sizes go from Tiny 64 to Titan 704). Bigger worlds get more continents, islands and mountain ranges,
+- **Cosmic worlds:** new worlds default to 2224×2224 tiles (about 5 million), ten times the area of the
+  Titan size and about 300 times the standard size. Sizes go from Tiny 64 through Titan 704 and
+  Gargantuan 1280 to Cosmic 2224. World generation uses every CPU core, and if a phone cannot hold a world
+  that big the game automatically falls back to a smaller one. Bigger worlds get more continents, islands and mountain ranges,
   and new worlds start with herds, predators and tribes already living in them.
 - **Daily life you can watch:** villagers have jobs. Woodcutters chop trees with axes, farmers work the
   fields with hoes, miners swing pickaxes, builders raise new houses with hammers, hunters carry spears.

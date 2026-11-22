@@ -1,6 +1,7 @@
 package com.luokai.luoworldbox
 
 import android.graphics.Bitmap
+import com.luokai.luoworldbox.core.CreatureGen
 import com.luokai.luoworldbox.core.Species
 import com.luokai.luoworldbox.core.SpriteGen
 
@@ -14,9 +15,13 @@ class SpriteBank {
     private fun make(px: IntArray): Bitmap =
         Bitmap.createBitmap(px, SpriteGen.N, SpriteGen.N, Bitmap.Config.ARGB_8888)
 
-    fun creature(sp: Species, frame: Int, faceRight: Boolean): Bitmap {
-        val key = sp.id * 4 + (frame and 1) * 2 + (if (faceRight) 1 else 0)
-        return creatures.getOrPut(key) { make(SpriteGen.creature(sp, frame and 1, faceRight)) }
+    /** frame 0..3 is the walk cycle; variant (0..3) picks clothes / coat colours. */
+    fun creature(sp: Species, frame: Int, faceRight: Boolean, variant: Int = 0): Bitmap {
+        val v = variant and 3
+        val key = ((sp.id * 4 + v) * 4 + (frame and 3)) * 2 + (if (faceRight) 1 else 0)
+        return creatures.getOrPut(key) {
+            Bitmap.createBitmap(CreatureGen.creature(sp, frame and 3, faceRight, v), CreatureGen.N, CreatureGen.N, Bitmap.Config.ARGB_8888)
+        }
     }
 
     fun tree(kind: Int): Bitmap {

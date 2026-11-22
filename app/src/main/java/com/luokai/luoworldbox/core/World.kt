@@ -58,9 +58,9 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
     private var nextKingdomId = 1
     private var accSlow = 0f
     @Transient private var night = false
-    private val maxSapients: Int get() = (w * h / 200).coerceIn(900, 2500)
-    private val maxAnimals: Int get() = (w * h / 250).coerceIn(1000, 2200)
-    private val maxMonsters: Int get() = 250
+    private val maxSapients: Int get() = (w * h / 200).coerceIn(900, 4500)
+    private val maxAnimals: Int get() = (w * h / 250).coerceIn(1000, 4000)
+    private val maxMonsters: Int get() = 300
     private var accKingdom = 0f
 
     // renderer bookkeeping (not saved)
@@ -103,6 +103,8 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
         }
     }
     fun clearDirty() { dirtyMin = h; dirtyMax = -1 }
+
+    fun burningTiles(): List<Int> = burning
 
     fun fxs(): ArrayList<Fx> {
         var f = fxList
@@ -338,6 +340,7 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
         c.alive = false
         totalDeaths++
         if (laws.exploding) explode(c.x, c.y, 3f, 0.3f, true, 60f)
+        else if (!c.inside) { val f = fxs(); if (f.size < 80) f.add(Fx(Fx.POOF, c.x, c.y, 0.8f, 1f, c.sp.color)) }
     }
 
     private fun stepCreatures(dt: Float) {
@@ -1209,14 +1212,16 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
     // ---------------------------------------------------------------- ambient nature
     private fun stepNature() {
         val a = age
-        val samples = max(8, w * h / 60)
+        val wanted = max(8, w * h / 60)
+        val samples = min(wanted, 30000)
+        val boost = wanted.toFloat() / samples
         repeat(samples) {
             val i = rnd.nextInt(w * h)
             val t = tiles[i].toInt()
             when (t) {
-                Tile.WASTE -> if (rnd.nextFloat() < 0.05f * a.growth) setTile(i, Tile.SOIL)
-                Tile.SOIL -> if (rnd.nextFloat() < 0.12f * a.growth && neighbourIs(i, Tile.GRASS, Tile.FOREST)) setTile(i, Tile.GRASS)
-                Tile.GRASS -> if (rnd.nextFloat() < 0.008f * a.growth && neighbourIs(i, Tile.FOREST, -1)) setTile(i, Tile.FOREST)
+                Tile.WASTE -> if (rnd.nextFloat() < 0.05f * a.growth * boost) setTile(i, Tile.SOIL)
+                Tile.SOIL -> if (rnd.nextFloat() < 0.12f * a.growth * boost && neighbourIs(i, Tile.GRASS, Tile.FOREST)) setTile(i, Tile.GRASS)
+                Tile.GRASS -> if (rnd.nextFloat() < 0.008f * a.growth * boost && neighbourIs(i, Tile.FOREST, -1)) setTile(i, Tile.FOREST)
                 Tile.LAVA -> {
                     val x = i % w; val y = i / w
                     if (x > 0) ignite(i - 1)
@@ -1224,7 +1229,7 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
                     if (y > 0) ignite(i - w)
                     if (y < h - 1) ignite(i + w)
                     val wet = neighbourIs(i, Tile.SHALLOW, Tile.DEEP)
-                    if (rnd.nextFloat() < (if (wet) 0.35f else 0.04f)) setTile(i, Tile.HILLS)
+                    if (rnd.nextFloat() < (if (wet) 0.35f else 0.04f) * boost) setTile(i, Tile.HILLS)
                 }
             }
         }
@@ -1342,7 +1347,11 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
         val t = tileAt(xi, yi)
         if (!sp.flies && !sp.swims && (t == Tile.DEEP || t == Tile.MOUNTAIN || t == Tile.LAVA)) return
         if (sp.swims && t == Tile.MOUNTAIN) return
-        if (spawn(sp, sx, sy, true) != null) sound("pop")
+        if (spawn(sp, sx, sy, true) != null) {
+            sound("pop")
+            val f = fxs()
+            if (f.size < 60) f.add(Fx(Fx.SPAWN, sx, sy, 0.9f, 1.2f, sp.color))
+        }
     }
 
     fun applyPower(id: String, x: Float, y: Float, r: Int) {
@@ -1380,13 +1389,13 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
             "bless" -> forEachNear(x, y, r + 1.5f) {
                 it.hp = it.sp.hp; it.hunger = 1f; it.burning = 0f; it.infected = -1f; it.mad = 0f
             }.also { fxs().add(Fx(Fx.RING, x, y, 0.9f, r + 1.5f)); sound("bless") }
-            "curse" -> forEachNear(x, y, r + 1.5f) { damage(it, it.sp.hp * 0.5f, null); it.mad = 10f }
+            "curse" -> { forEachNear(x, y, r + 1.5f) { damage(it, it.sp.hp * 0.5f, null); it.mad = 10f }; fxs().add(Fx(Fx.CURSE, x, y, 1.0f, r + 1.5f)) }
             "friendship" -> {
                 val ks = HashSet<Int>()
                 forEachNear(x, y, r + 4f) { if (it.kingdomId >= 0) ks.add(it.kingdomId) }
                 wars.removeAll { w2 -> ks.contains((w2 / 100000L).toInt()) || ks.contains((w2 % 100000L).toInt()) }
                 forEachNear(x, y, r + 2f) { it.breedCd = 0f; it.hunger = min(1f, it.hunger + 0.3f) }
-                fxs().add(Fx(Fx.RING, x, y, 0.9f, r + 3f))
+                fxs().add(Fx(Fx.RING, x, y, 0.9f, r + 3f, 0xFFFF80B0.toInt()))
             }
             "spite" -> {
                 val ks = ArrayList<Int>()
@@ -1418,7 +1427,7 @@ class World(val w: Int, val h: Int, val seed: Long) : Serializable {
                 if (rnd.nextFloat() < 0.7f) { if (Tile.isFlammable(t) || bld[i] > 0) ignite(i) else if (!Tile.isWater(t)) igniteForce(i, 6) }
             }.also { forEachNear(x, y, r + 0.5f) { it.burning = 5f } }
             "earthquake" -> {
-                fxs().add(Fx(Fx.RING, x, y, 1.0f, 8f))
+                fxs().add(Fx(Fx.QUAKE, x, y, 1.6f, 8f))
                 paint(x, y, 8) { i, t ->
                     if (rnd.nextFloat() < 0.5f) {
                         removeBuildingChance(i, 0.8f)

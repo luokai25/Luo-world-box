@@ -102,10 +102,16 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
     private val dp = resources.displayMetrics.density
     private var bitmap: Bitmap? = null
     private var bmpWorld: World? = null
-    private var px = IntArray(0)
+    private var rowBuf = IntArray(0)
+    private val fx = Effects(resources.displayMetrics.density)
+    @Volatile private var frameDt = 0.016f
+    private var oomRetried = false
     private val dst = RectF()
     private val rect = RectF()
+    private val oval = RectF()
     private val bmpPaint = Paint().apply { isFilterBitmap = false; isAntiAlias = false }
+    private val mapPaint = Paint().apply { isFilterBitmap = false; isAntiAlias = false }
+    private val shadow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x38000000 }
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
     private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER }
@@ -135,21 +141,69 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
     }
 
     // ------------------------------------------------------------------ public API
+    /** Paints the whole map into a bitmap. Runs on a loading thread so the game never freezes on huge worlds. */
+    private fun buildBitmap(w: World): Bitmap {
+        val bmp = Bitmap.createBitmap(w.w, w.h, Bitmap.Config.ARGB_8888)
+        val chunk = max(1, (1 shl 16) / w.w) + 1
+        val buf = IntArray(w.w * chunk)
+        var y = 0
+        while (y < w.h) {
+            val n = min(chunk, w.h - y)
+            for (r in 0 until n) {
+                val yy = y + r
+                for (x in 0 until w.w) buf[r * w.w + x] = TileRender.color(w, yy * w.w + x, x, yy, 0)
+            }
+            bmp.setPixels(buf, 0, w.w, 0, y, w.w, n)
+            y += n
+        }
+        return bmp
+    }
+
+    private fun install(w: World, bmp: Bitmap) {
+        cmds.add(Runnable {
+            bitmap?.recycle()
+            bitmap = bmp
+            bmpWorld = w
+            w.clearDirty()
+            world = w
+            needFit = true
+            loading = false
+        })
+    }
+
     fun newWorld(cfg: WorldConfig, seed: Long = System.currentTimeMillis()) {
         loading = true
         loadingText = "Splitting atoms..."
         Thread {
-            val w = WorldGen.generate(cfg, seed) { loadingText = it }
-            cmds.add(Runnable {
-                world = w
-                needFit = true
-                loading = false
-            })
+            val c = cfg.copyConfig()
+            var generated: World? = null
+            var painted: Bitmap? = null
+            while (painted == null) {
+                try {
+                    generated = WorldGen.generate(c, seed) { loadingText = it }
+                    loadingText = "Painting the world..."
+                    painted = buildBitmap(generated)
+                } catch (e: OutOfMemoryError) {
+                    generated = null
+                    if (c.sizeIndex == 0) throw e
+                    c.sizeIndex -= 1
+                    loadingText = "Not enough memory, trying a smaller world..."
+                }
+            }
+            install(generated!!, painted)
         }.start()
     }
 
     fun loadWorld(w: World) {
-        cmds.add(Runnable { world = w; needFit = true; loading = false })
+        loading = true
+        loadingText = "Painting the world..."
+        Thread {
+            try {
+                install(w, buildBitmap(w))
+            } catch (e: OutOfMemoryError) {
+                loadingText = "This device does not have enough memory for that world."
+            }
+        }.start()
     }
 
     fun postGame(fn: (World) -> Unit) {
@@ -196,6 +250,7 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
         while (running) {
             val now = System.nanoTime()
             val dt = min(0.1f, (now - last) / 1e9f)
+            frameDt = dt
             last = now
             while (true) { (cmds.poll() ?: break).run() }
             var ti = 0
@@ -243,6 +298,7 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
             repeat(max(1, r)) { w.applyPower(p.id, x, y, r) }
         } else {
             w.applyPower(p.id, x, y, r)
+            fx.onPower(p.id, x, y, r)
         }
     }
 
@@ -469,18 +525,25 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
         if (bmpWorld !== w || bitmap == null) {
             bitmap?.recycle()
             bitmap = Bitmap.createBitmap(w.w, w.h, Bitmap.Config.ARGB_8888)
-            px = IntArray(w.w * w.h)
             bmpWorld = w
             w.markAllDirty()
         }
         if (w.dirtyMax >= w.dirtyMin) {
             val y0 = max(0, w.dirtyMin)
             val y1 = min(w.h - 1, w.dirtyMax)
-            for (y in y0..y1) for (x in 0 until w.w) {
-                val i = y * w.w + x
-                px[i] = TileRender.color(w, i, x, y, frame)
+            // paint in chunks of rows so a 5 million tile world never needs a second full-size array
+            val chunk = max(1, 1 shl 16) / w.w + 1
+            if (rowBuf.size < w.w * chunk) rowBuf = IntArray(w.w * chunk)
+            var y = y0
+            while (y <= y1) {
+                val n = min(chunk, y1 - y + 1)
+                for (r in 0 until n) {
+                    val yy = y + r
+                    for (x in 0 until w.w) rowBuf[r * w.w + x] = TileRender.color(w, yy * w.w + x, x, yy, frame)
+                }
+                bitmap!!.setPixels(rowBuf, 0, w.w, 0, y, w.w, n)
+                y += n
             }
-            bitmap!!.setPixels(px, y0 * w.w, w.w, 0, y0, w.w, y1 - y0 + 1)
             w.clearDirty()
         }
     }
@@ -502,12 +565,32 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
             }
             needFit = false
         }
-        refreshBitmap(w)
+        try {
+            refreshBitmap(w)
+        } catch (e: OutOfMemoryError) {
+            if (!oomRetried) {
+                oomRetried = true
+                loading = true
+                world = null
+                bitmap = null
+                bmpWorld = null
+                ui.post { host.showInfo("Not enough memory", "This device could not hold a world that large. A smaller world will be created.") }
+                newWorld(WorldConfig(sizeIndex = 7))
+            }
+            return
+        }
         val s = zoom
-        val ox = width / 2f - camX * s
-        val oy = height / 2f - camY * s
+        val shakeAmt = fx.shake
+        val shx = if (shakeAmt > 0.3f) (Math.random().toFloat() - 0.5f) * shakeAmt else 0f
+        val shy = if (shakeAmt > 0.3f) (Math.random().toFloat() - 0.5f) * shakeAmt else 0f
+        val ox = width / 2f - camX * s + shx
+        val oy = height / 2f - camY * s + shy
         dst.set(ox, oy, ox + w.w * s, oy + w.h * s)
-        canvas.drawBitmap(bitmap!!, null, dst, bmpPaint)
+        mapPaint.isFilterBitmap = s < 1.2f
+        canvas.drawBitmap(bitmap!!, null, dst, mapPaint)
+        val effDt = if (paused || appPaused) 0f else frameDt
+        fx.begin(width, height, s, camX - width / 2f / s, camY - height / 2f / s, camX + width / 2f / s, camY + height / 2f / s)
+        fx.update(w, effDt)
 
         stroke.color = 0x66FFFFFF; stroke.strokeWidth = 1.5f * dp
         canvas.drawRect(dst, stroke)
@@ -566,8 +649,10 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
         }
 
         drawCreatures(canvas, w, s, ox, oy)
-        drawZonesAndFx(canvas, w, s, ox, oy)
+        fx.drawShapes(canvas, w, ox, oy)
         drawDayNight(canvas, w, s, ox, oy)
+        fx.drawParticles(canvas, ox, oy)
+        fx.drawScreen(canvas)
         drawBrush(canvas)
         drawHud(canvas, w)
     }
@@ -595,12 +680,12 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
     }
 
     private fun drawCreatures(canvas: Canvas, w: World, s: Float, ox: Float, oy: Float) {
-        val size = max(s * 1.15f, 12f * dp).coerceAtMost(96f * dp)
+        val size = max(s * 1.25f, 12f * dp).coerceAtMost(110f * dp)
         for (c in w.creatures) {
             if (!c.alive || c.inside) continue
             val cx = ox + c.x * s
             val cy = oy + c.y * s
-            if (cx < -60 || cx > width + 60 || cy < -60 || cy > height + 60) continue
+            if (cx < -80 || cx > width + 80 || cy < -80 || cy > height + 80) continue
             val sp = c.sp
             if (s < 2.5f) {
                 fill.color = sp.color
@@ -608,33 +693,45 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
                 continue
             }
             val moving = c.hasTarget || c.chase != null
-            val frame = if (moving) ((w.time * 6).toInt() + c.id) and 1 else 0
-            val bob = if (moving && frame == 1) -size * 0.04f else 0f
-            val kid = if (!c.isAdult && sp.kind != Kind.MONSTER) 0.7f else 1f
-            val sz = size * kid
-            dst.set(cx - sz / 2, cy - sz * 0.85f + bob, cx + sz / 2, cy + sz * 0.15f + bob)
-            canvas.drawBitmap(sprites.creature(sp, frame, c.faceRight), null, dst, bmpPaint)
-            if (sp.kind == Kind.SAPIENT && s >= 5f) { drawCarry(canvas, c, cx, cy, sz); drawTool(canvas, w, c, cx, cy, sz) }
+            val speedUp = if (c.fleeing || c.chase != null) 14 else 9
+            val frame = if (moving) ((w.time * speedUp).toInt() + c.id) and 3 else 0
+            val breathe = if (!moving) sin(w.time * 2.0 + c.id).toFloat() * 0.012f else 0f
+            val bob = if (moving && (frame == 1 || frame == 3)) -size * 0.03f else 0f
+            val kid = if (!c.isAdult && sp.kind != Kind.MONSTER) 0.68f else 1f
+            val sz = size * kid * sp.scale
+            // lunge when attacking
+            var lunge = 0f
+            if (c.chase != null && c.atkCd > 0.5f) lunge = (c.atkCd - 0.5f) * sz * 0.5f * (if (c.faceRight) 1f else -1f)
+            val flyLift = if (sp.flies) -sz * 0.35f - sin(w.time * 4.0 + c.id).toFloat() * sz * 0.05f else 0f
+            val px = cx + lunge
+            if (s >= 3f) {
+                val shw = sz * 0.34f * (if (sp.flies) 0.7f else 1f)
+                oval.set(cx - shw, cy - sz * 0.03f, cx + shw, cy + sz * 0.10f)
+                canvas.drawOval(oval, shadow)
+            }
+            dst.set(px - sz / 2, cy - sz * 0.88f + bob + flyLift - sz * breathe, px + sz / 2, cy + sz * 0.12f + bob + flyLift)
+            canvas.drawBitmap(sprites.creature(sp, frame, c.faceRight, if (sp.kind == Kind.MONSTER) 0 else c.id), null, dst, bmpPaint)
+            if (sp.kind == Kind.SAPIENT && s >= 5f) { drawCarry(canvas, c, px, cy + flyLift, sz); drawTool(canvas, w, c, px, cy + flyLift, sz) }
             if (sp.kind == Kind.SAPIENT) {
                 val k = w.kingdomById(c.kingdomId)
                 if (k != null) {
                     fill.color = k.color
-                    canvas.drawRect(cx - sz * 0.18f, dst.top - 3 * dp, cx + sz * 0.18f, dst.top, fill)
+                    canvas.drawRect(px - sz * 0.16f, dst.top - 3 * dp, px + sz * 0.16f, dst.top, fill)
                 }
             }
             if (c.burning > 0f) {
                 fill.color = 0xFFFF7A1A.toInt()
-                canvas.drawRect(cx - 2 * dp, dst.top - 6 * dp, cx + 2 * dp, dst.top - 1 * dp, fill)
+                canvas.drawRect(px - 2 * dp, dst.top - 6 * dp, px + 2 * dp, dst.top - 1 * dp, fill)
             }
             if (c.infected >= 0f) {
                 fill.color = 0xFF66FF66.toInt()
-                canvas.drawCircle(cx, dst.top - 4 * dp, 2.5f * dp, fill)
+                canvas.drawCircle(px, dst.top - 4 * dp, 2.5f * dp, fill)
             }
             if (s >= 5f && c.hp < sp.hp) {
                 fill.color = 0xAA000000.toInt()
-                canvas.drawRect(cx - sz / 2, dst.bottom + 1, cx + sz / 2, dst.bottom + 1 + 3 * dp, fill)
+                canvas.drawRect(px - sz / 2, dst.bottom + 1, px + sz / 2, dst.bottom + 1 + 3 * dp, fill)
                 fill.color = 0xFF3DDC55.toInt()
-                canvas.drawRect(cx - sz / 2, dst.bottom + 1, cx - sz / 2 + sz * (c.hp / sp.hp).coerceIn(0f, 1f), dst.bottom + 1 + 3 * dp, fill)
+                canvas.drawRect(px - sz / 2, dst.bottom + 1, px - sz / 2 + sz * (c.hp / sp.hp).coerceIn(0f, 1f), dst.bottom + 1 + 3 * dp, fill)
             }
         }
     }
@@ -643,7 +740,7 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
         if (c.carry == 0) return
         val u = sz / 16f
         val dir = if (c.faceRight) 1f else -1f
-        val bx = cx - dir * sz * 0.26f
+        val bx = cx - dir * sz * 0.2f
         val by = cy - sz * 0.5f
         fill.color = when (c.carry) { 1 -> 0xFF8A5A2A.toInt(); 2 -> 0xFFE0C040.toInt(); 3 -> 0xFF8A9AAA.toInt(); else -> 0xFFC0443A.toInt() }
         canvas.drawRect(bx - 2.4f * u, by - 1.4f * u, bx + 2.4f * u, by + 1.4f * u, fill)
@@ -663,7 +760,7 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
         val u = sz / 16f
         val dir = if (c.faceRight) 1f else -1f
         canvas.save()
-        canvas.translate(cx + dir * sz * 0.30f, cy - sz * 0.30f)
+        canvas.translate(cx + dir * sz * 0.17f, cy - sz * 0.22f)
         canvas.scale(dir, 1f)
         canvas.rotate(ang)
         val wood = 0xFF6A4A2A.toInt()
@@ -719,89 +816,6 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
         }
     }
 
-    private fun drawZonesAndFx(canvas: Canvas, w: World, s: Float, ox: Float, oy: Float) {
-        for (z in w.zones) {
-            val cx = ox + z.x * s
-            val cy = oy + z.y * s
-            when (z.type) {
-                Zone.RAIN -> {
-                    fill.color = 0x553A6FC8
-                    canvas.drawCircle(cx, cy, z.r * s, fill)
-                    stroke.color = 0xCC9CC8FF.toInt(); stroke.strokeWidth = 1.5f * dp
-                    for (k in 0 until 14) {
-                        val a = (k * 97 + frame * 3) % 360
-                        val rx = cx + ((a * 7) % 100 - 50) / 50f * z.r * s * 0.8f
-                        val ry = cy + (((a * 13 + frame * 6) % 100) - 50) / 50f * z.r * s * 0.8f
-                        canvas.drawLine(rx, ry, rx - 2 * dp, ry + 8 * dp, stroke)
-                    }
-                }
-                Zone.ACID -> {
-                    fill.color = 0x5570C020
-                    canvas.drawCircle(cx, cy, z.r * s, fill)
-                }
-                Zone.TORNADO -> {
-                    stroke.color = 0xFFD0D0D8.toInt(); stroke.strokeWidth = 2.5f * dp
-                    for (k in 0 until 6) {
-                        val ph = frame * 0.25f + k
-                        val rr = (1f + k * 0.55f) * s * 0.8f
-                        val yy = cy - k * s * 0.7f
-                        canvas.drawLine(cx - rr + sin(ph) * s * 0.3f, yy, cx + rr + sin(ph) * s * 0.3f, yy, stroke)
-                    }
-                }
-                Zone.BLACKHOLE -> {
-                    fill.color = 0xFF000000.toInt()
-                    canvas.drawCircle(cx, cy, z.r * s * 0.8f, fill)
-                    stroke.color = 0xFFB050FF.toInt(); stroke.strokeWidth = 3f * dp
-                    canvas.drawCircle(cx, cy, z.r * s * 0.8f + 2 * dp, stroke)
-                }
-                Zone.VOLCANO -> {
-                    fill.color = 0x66E8480C
-                    canvas.drawCircle(cx, cy, z.r * s, fill)
-                    fill.color = 0xFFFFB030.toInt()
-                    for (k in 0 until 5) {
-                        val a = (frame * 0.2f + k * 1.3f)
-                        val rr = (z.r * 0.6f) * s * (0.4f + (k * 0.17f))
-                        canvas.drawCircle(cx + kotlin.math.cos(a) * rr, cy - kotlin.math.abs(sin(a * 1.7f)) * z.r * s * 0.9f, max(2f * dp, s * 0.35f), fill)
-                    }
-                }
-                Zone.METEOR -> {
-                    val fall = z.life / 0.9f
-                    fill.color = 0xFFFFB030.toInt()
-                    canvas.drawCircle(cx + fall * 6 * s, cy - fall * 22 * s, max(3f * dp, s * 0.9f), fill)
-                }
-            }
-        }
-        for (f in w.fxs()) {
-            val cx = ox + f.x * s
-            val cy = oy + f.y * s
-            val p = (f.t / f.life).coerceIn(0f, 1f)
-            when (f.type) {
-                Fx.EXPLOSION -> {
-                    fill.color = ((((1f - p) * 190).toInt()) shl 24) or 0xFF9A20
-                    canvas.drawCircle(cx, cy, f.r * s * (0.3f + p * 0.9f), fill)
-                }
-                Fx.RING -> {
-                    stroke.color = ((((1f - p) * 255).toInt()) shl 24) or 0xFFF0A0
-                    stroke.strokeWidth = 3f * dp
-                    canvas.drawCircle(cx, cy, f.r * s * (0.3f + p * 0.8f), stroke)
-                }
-                Fx.LIGHTNING -> {
-                    stroke.color = ((((1f - p) * 255).toInt()) shl 24) or 0xFFFFFF
-                    stroke.strokeWidth = 3f * dp
-                    var px0 = cx + 4 * dp
-                    var py0 = 0f
-                    val steps = 8
-                    for (k in 1..steps) {
-                        val py1 = cy * k / steps
-                        val px1 = if (k == steps) cx else cx + (((k * 37 + frame / 2) % 9) - 4) * dp
-                        canvas.drawLine(px0, py0, px1, py1, stroke)
-                        px0 = px1; py0 = py1
-                    }
-                }
-            }
-        }
-    }
-
     private fun drawBrush(canvas: Canvas) {
         val p = selected ?: return
         if (mode != MODE_PAINT || !p.brush) return
@@ -833,7 +847,7 @@ class GameView(context: Context, private val host: Host) : SurfaceView(context),
             if (sp != null) {
                 val sz = 40f * dp
                 dst.set(cx - sz / 2, cy - sz / 2, cx + sz / 2, cy + sz / 2)
-                canvas.drawBitmap(sprites.creature(sp, 0, true), null, dst, bmpPaint)
+                canvas.drawBitmap(sprites.creature(sp, 0, true, 0), null, dst, bmpPaint)
                 return
             }
         }

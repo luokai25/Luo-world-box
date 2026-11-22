@@ -5,6 +5,7 @@ import java.io.ObjectInputStream
 import java.io.ObjectOutputStream
 import java.io.Serializable
 import java.util.zip.GZIPInputStream
+import java.util.zip.Deflater
 import java.util.zip.GZIPOutputStream
 
 class SaveHeader(val year: Int, val pop: Int, val size: Int, val savedAt: Long) : Serializable
@@ -16,7 +17,10 @@ object SaveStore {
 
     fun save(dir: File, slot: String, world: World) {
         val tmp = File(dir, "$slot.tmp")
-        ObjectOutputStream(GZIPOutputStream(tmp.outputStream().buffered())).use {
+        val gz = object : GZIPOutputStream(tmp.outputStream().buffered(), 1 shl 16) {
+            init { def.setLevel(Deflater.BEST_SPEED) }
+        }
+        ObjectOutputStream(gz).use {
             it.writeObject(SaveHeader(world.year, world.population(), world.w, System.currentTimeMillis()))
             it.writeObject(world)
         }
